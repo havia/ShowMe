@@ -1,0 +1,22 @@
+# Core ML
+torch>=2.0
+torchvision
+transformers>=4.35
+openai-whisper
+sentence-transformers>=2.2
+easyocr
+
+# Video / Audio
+opencv-python
+ffmpeg-python
+Pillow
+
+# Vector DB
+chromadb>=0.4
+
+# UI
+gradio>=4.0
+
+# Utilities
+tqdm
+numpy
