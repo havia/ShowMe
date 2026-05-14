@@ -23,7 +23,7 @@ from transformers import CLIPModel, CLIPProcessor
 # Config  (must match index.py)
 # ─────────────────────────────────────────────
 
-TEXT_MODEL_NAME  = "all-MiniLM-L6-v2"
+TEXT_MODEL_NAME  = "paraphrase-multilingual-mpnet-base-v2"
 CLIP_MODEL_NAME  = "openai/clip-vit-base-patch32"
 COLL_TEXT        = "text_chunks"
 COLL_VISUAL      = "visual_frames"

@@ -13,10 +13,12 @@ Run:
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 try:
@@ -53,10 +55,12 @@ from tqdm import tqdm
 # Config
 # ─────────────────────────────────────────────
 
-FRAME_INTERVAL_SEC = 1        # extract 1 frame per second
+FRAME_INTERVAL_SEC = 300      # extract 1 frame every 5 minutes
 OCR_CHANGE_THRESHOLD = 0.15   # skip OCR if frame looks same as previous
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
-WHISPER_MODEL_SIZE = "base"   # tiny | base | small | medium | large
+WHISPER_MODEL_SIZE = "small"  # tiny | base | small | medium | large
+WHISPER_LANGUAGE = "he"       # Hebrew lectures with English code terms
+OCR_LANGUAGES = ["en"]        # EasyOCR languages (no Hebrew support; code/slide terms usually in English)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -64,14 +68,18 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Model loading  (called once, shared across videos)
 # ─────────────────────────────────────────────
 
-def load_models():
+def load_models(need_whisper: bool = True):
     print(f"[models] Loading on device: {DEVICE}")
 
-    print("[models] Loading Whisper …")
-    whisper_model = whisper.load_model(WHISPER_MODEL_SIZE, device=DEVICE)
+    if need_whisper:
+        print("[models] Loading Whisper …")
+        whisper_model = whisper.load_model(WHISPER_MODEL_SIZE, device=DEVICE)
+    else:
+        print("[models] Skipping Whisper (all videos have VTT captions).")
+        whisper_model = None
 
     print("[models] Loading EasyOCR …")
-    ocr_reader = easyocr.Reader(["en"], gpu=(DEVICE == "cuda"))
+    ocr_reader = easyocr.Reader(OCR_LANGUAGES, gpu=(DEVICE == "cuda"))
 
     print("[models] Loading CLIP …")
     clip_processor = CLIPProcessor.from_pretrained(CLIP_MODEL_NAME)
@@ -117,6 +125,58 @@ def extract_audio(video_path: Path, tmp_dir: str) -> Path:
 
 
 # ─────────────────────────────────────────────
+# VTT transcription (skips Whisper when Zoom captions are available)
+# ─────────────────────────────────────────────
+
+_VTT_TIMESTAMP_RE = re.compile(
+    r"^(\d{1,2}):(\d{2}):(\d{2})\.(\d{3})\s+-->\s+(\d{1,2}):(\d{2}):(\d{2})\.(\d{3})"
+)
+
+
+def _vtt_ts_to_seconds(h: str, m: str, s: str, ms: str) -> float:
+    return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+
+def parse_vtt(vtt_path: Path) -> list[dict]:
+    """Parse a WebVTT file into Whisper-shaped segments: {start, end, text}."""
+    segments: list[dict] = []
+    current_start: float | None = None
+    current_end: float | None = None
+    current_lines: list[str] = []
+
+    def flush():
+        if current_start is None or not current_lines:
+            return
+        text = " ".join(line.strip() for line in current_lines).strip()
+        if text:
+            segments.append({
+                "start": round(current_start, 2),
+                "end":   round(current_end,   2),
+                "text":  text,
+            })
+
+    with open(vtt_path, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.rstrip("\n").rstrip("\r")
+            m = _VTT_TIMESTAMP_RE.match(line)
+            if m:
+                flush()
+                current_start = _vtt_ts_to_seconds(m.group(1), m.group(2), m.group(3), m.group(4))
+                current_end   = _vtt_ts_to_seconds(m.group(5), m.group(6), m.group(7), m.group(8))
+                current_lines = []
+            elif line.strip() == "":
+                flush()
+                current_start = current_end = None
+                current_lines = []
+            else:
+                if current_start is not None and line.strip() != "WEBVTT" and not line.startswith("NOTE"):
+                    current_lines.append(line)
+        flush()
+
+    return segments
+
+
+# ─────────────────────────────────────────────
 # Whisper transcription
 # ─────────────────────────────────────────────
 
@@ -129,6 +189,7 @@ def transcribe(audio_path: Path, whisper_model) -> list[dict]:
     print("  [whisper] Transcribing audio …")
     result = whisper_model.transcribe(
         str(audio_path),
+        language=WHISPER_LANGUAGE,
         word_timestamps=True,
         verbose=False,
     )
@@ -148,6 +209,13 @@ def transcribe(audio_path: Path, whisper_model) -> list[dict]:
 # ─────────────────────────────────────────────
 # Frame extraction + OCR + CLIP
 # ─────────────────────────────────────────────
+
+def format_hms(seconds: float) -> str:
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:d}:{m:02d}:{s:02d}"
+
 
 def frame_difference(prev: np.ndarray, curr: np.ndarray) -> float:
     """Mean absolute pixel difference (0–1 range) to detect slide changes."""
@@ -194,42 +262,55 @@ def process_frames(
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration_sec = total_frames / fps
-    frame_step = int(fps * FRAME_INTERVAL_SEC)
 
     ocr_records  = []
     clip_records = []
     prev_frame   = None
-    frame_idx    = 0
 
-    pbar = tqdm(total=int(duration_sec), unit="s", desc="  [frames]")
+    sample_times = [t for t in range(0, int(duration_sec), FRAME_INTERVAL_SEC)]
+    n = len(sample_times)
+    print(f"  [frames] Sampling {n} frames at {FRAME_INTERVAL_SEC}s intervals "
+          f"(duration: {format_hms(duration_sec)})")
 
-    while True:
+    for i, timestamp in enumerate(sample_times, start=1):
+        t0 = time.time()
+        cap.set(cv2.CAP_PROP_POS_MSEC, timestamp * 1000.0)
         ret, frame_bgr = cap.read()
         if not ret:
-            break
+            print(f"  [frames] {i}/{n} @ {format_hms(timestamp)}  — seek failed, skipping")
+            continue
+        t_seek = time.time() - t0
 
-        if frame_idx % frame_step == 0:
-            timestamp = round(frame_idx / fps, 2)
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            diff = frame_difference(prev_frame, frame_rgb)
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        diff = frame_difference(prev_frame, frame_rgb)
 
-            # ── CLIP embedding (every sampled frame) ──────────────────
-            clip_vec = embed_frame(frame_rgb, clip_processor, clip_model)
-            clip_records.append({"timestamp": timestamp, "embedding": clip_vec})
+        # ── CLIP embedding ────────────────────────────────────────
+        t1 = time.time()
+        clip_vec = embed_frame(frame_rgb, clip_processor, clip_model)
+        clip_records.append({"timestamp": float(timestamp), "embedding": clip_vec})
+        t_clip = time.time() - t1
 
-            # ── OCR (only when slide has changed enough) ───────────────
-            if diff > OCR_CHANGE_THRESHOLD:
-                ocr_results = ocr_reader.readtext(frame_rgb, detail=0, paragraph=True)
-                text = " ".join(ocr_results).strip()
-                if text:
-                    ocr_records.append({"timestamp": timestamp, "text": text})
+        # ── OCR (only when slide has changed enough) ──────────────
+        t_ocr = 0.0
+        ocr_chars = 0
+        if diff > OCR_CHANGE_THRESHOLD:
+            t2 = time.time()
+            ocr_results = ocr_reader.readtext(frame_rgb, detail=0, paragraph=True)
+            text = " ".join(ocr_results).strip()
+            t_ocr = time.time() - t2
+            if text:
+                ocr_records.append({"timestamp": float(timestamp), "text": text})
+                ocr_chars = len(text)
+            ocr_note = f"OCR {t_ocr:4.1f}s ({ocr_chars} chars)"
+        else:
+            ocr_note = "OCR skipped (frame unchanged)"
 
-            prev_frame = frame_rgb
-            pbar.update(FRAME_INTERVAL_SEC)
+        prev_frame = frame_rgb
+        total = time.time() - t0
+        print(f"  [frames] {i:2d}/{n} @ {format_hms(timestamp)}  "
+              f"seek {t_seek:4.1f}s  CLIP {t_clip:4.1f}s  {ocr_note}  "
+              f"(total {total:4.1f}s)")
 
-        frame_idx += 1
-
-    pbar.close()
     cap.release()
 
     print(f"  [frames] {len(clip_records)} CLIP embeddings, {len(ocr_records)} OCR records.")
@@ -263,10 +344,16 @@ def ingest_video(
     print(f"  Processing: {video_path.name}")
     print(f"{'='*60}")
 
-    # ── 1. Audio → Whisper ────────────────────────────────────────
-    with tempfile.TemporaryDirectory() as tmp:
-        audio_path = extract_audio(video_path, tmp)
-        asr_segments = transcribe(audio_path, whisper_model)
+    # ── 1. Transcript: prefer local Zoom VTT, fall back to Whisper ──
+    vtt_path = video_path.with_suffix(".vtt")
+    if vtt_path.exists():
+        print(f"  [vtt] Using Zoom captions: {vtt_path.name}")
+        asr_segments = parse_vtt(vtt_path)
+        print(f"  [vtt] {len(asr_segments)} segments parsed.")
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = extract_audio(video_path, tmp)
+            asr_segments = transcribe(audio_path, whisper_model)
 
     # ── 2. Frames → OCR + CLIP ────────────────────────────────────
     ocr_records, clip_records = process_frames(
@@ -324,8 +411,11 @@ def main():
 
     print(f"Found {len(video_files)} video(s).")
 
+    # Skip loading Whisper if every video has a sibling .vtt
+    need_whisper = any(not vf.with_suffix(".vtt").exists() for vf in video_files)
+
     # Load models once
-    whisper_model, ocr_reader, clip_processor, clip_model = load_models()
+    whisper_model, ocr_reader, clip_processor, clip_model = load_models(need_whisper=need_whisper)
 
     # Process each video
     all_meta = []

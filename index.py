@@ -23,10 +23,11 @@ from tqdm import tqdm
 # Config
 # ─────────────────────────────────────────────
 
-TEXT_MODEL_NAME  = "all-MiniLM-L6-v2"   # fast, good quality, 384-dim
-CHUNK_WINDOW_SEC = 5.0                   # merge segments within this window
+TEXT_MODEL_NAME  = "paraphrase-multilingual-mpnet-base-v2"  # multilingual, 768-dim, supports Hebrew
+CHUNK_WINDOW_SEC = 15.0                  # cap chunk duration
+CHUNK_MAX_CHARS  = 500                   # cap chunk length in characters
 CLIP_DIM         = 512                   # CLIP ViT-B/32 output size
-TEXT_DIM         = 384                   # sentence-transformers MiniLM output size
+TEXT_DIM         = 768                   # mpnet-base output size
 
 # Collection names inside ChromaDB
 COLL_TEXT   = "text_chunks"    # ASR + OCR text with text embeddings
@@ -53,7 +54,9 @@ def chunk_asr(segments: list[dict], window_sec: float = CHUNK_WINDOW_SEC) -> lis
     current["source"] = "asr"
 
     for seg in segments[1:]:
-        if seg["start"] - current["start"] <= window_sec:
+        span_after_merge = seg["end"] - current["start"]
+        chars_after_merge = len(current["text"]) + 1 + len(seg["text"])
+        if span_after_merge <= window_sec and chars_after_merge <= CHUNK_MAX_CHARS:
             # Extend the current chunk
             current["end"]   = seg["end"]
             current["text"] += " " + seg["text"]
