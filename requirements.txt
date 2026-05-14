@@ -1,5 +1,5 @@
 # Core ML
-torch>=2.0
+torch>=2.0,<2.11   # 2.11.0 has an inspect.getsource() bug that breaks transformers integrations
 torchvision
 transformers>=4.35
 openai-whisper
@@ -16,6 +16,10 @@ chromadb>=0.4
 
 # UI
 gradio>=4.0
+
+# LLM anchor picker
+anthropic>=0.40
+python-dotenv
 
 # Utilities
 tqdm

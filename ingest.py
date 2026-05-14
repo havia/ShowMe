@@ -397,6 +397,10 @@ def main():
         "--out", type=Path, default=Path("data/index/raw"),
         help="Output directory for JSON files (default: data/index/raw/)",
     )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-ingest videos even if data/index/raw/<id>/meta.json already exists.",
+    )
     args = parser.parse_args()
 
     # Collect video files
@@ -409,17 +413,29 @@ def main():
         print("No .mp4 files found. Exiting.")
         return
 
-    print(f"Found {len(video_files)} video(s).")
+    # Skip already-ingested videos unless --force
+    to_process: list[Path] = []
+    for vf in video_files:
+        if not args.force and (args.out / vf.stem / "meta.json").exists():
+            print(f"  Skipping {vf.name} — already ingested (pass --force to re-run).")
+            continue
+        to_process.append(vf)
 
-    # Skip loading Whisper if every video has a sibling .vtt
-    need_whisper = any(not vf.with_suffix(".vtt").exists() for vf in video_files)
+    if not to_process:
+        print("Nothing to do. All videos already ingested.")
+        return
+
+    print(f"Processing {len(to_process)} video(s) (out of {len(video_files)} total).")
+
+    # Skip loading Whisper if every to-be-processed video has a sibling .vtt
+    need_whisper = any(not vf.with_suffix(".vtt").exists() for vf in to_process)
 
     # Load models once
     whisper_model, ocr_reader, clip_processor, clip_model = load_models(need_whisper=need_whisper)
 
     # Process each video
     all_meta = []
-    for vf in video_files:
+    for vf in to_process:
         meta = ingest_video(
             vf, args.out,
             whisper_model, ocr_reader, clip_processor, clip_model,

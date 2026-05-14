@@ -44,24 +44,35 @@ SOURCE_LABEL = {
 }
 
 
-def results_to_rows(results: list[SearchResult]) -> list[list[str]]:
+def results_to_rows(
+    results: list[SearchResult],
+    anchor_index: int | None = None,
+) -> list[list[str]]:
     rows: list[list[str]] = []
     for i, r in enumerate(results):
+        src = SOURCE_LABEL.get(r.source, r.source)
+        if anchor_index is not None and i == anchor_index:
+            src = f"🌟 {src}"
         rows.append([
             str(i + 1),
             format_timestamp(r.start),
             r.video_id,
-            SOURCE_LABEL.get(r.source, r.source),
+            src,
             r.text[:200],
         ])
     return rows
 
 
-def results_to_choices(results: list[SearchResult]) -> list[str]:
+def results_to_choices(
+    results: list[SearchResult],
+    anchor_index: int | None = None,
+) -> list[str]:
     choices: list[str] = []
     for i, r in enumerate(results):
         ts = format_timestamp(r.start)
         src = SOURCE_LABEL.get(r.source, r.source)
+        if anchor_index is not None and i == anchor_index:
+            src = f"🌟 {src}"
         choices.append(f"{i + 1}. {ts} | {r.video_id} | {src}")
     return choices
 
@@ -90,17 +101,41 @@ def build_app(engine: SearchEngine, videos_dir: Path):
     # Store last results in a closure list
     _last_results: list[SearchResult] = []
 
+    CONF_BADGE = {"high": "🟢 high", "medium": "🟡 medium", "low": "🔴 low"}
+
     def do_search(query: str, top_k: int, video_filter: str):
         nonlocal _last_results
         if not query.strip():
-            return [], gr.update(choices=[], value=None), None
+            return gr.update(value="", visible=False), [], gr.update(choices=[], value=None), None
 
         vf = video_filter if video_filter and video_filter != "All videos" else None
-        _last_results = engine.search(query, top_k=int(top_k), video_filter=vf)
-        rows = results_to_rows(_last_results)
-        choices = results_to_choices(_last_results)
+        pick = engine.find_anchor(query, top_k_display=int(top_k), video_filter=vf)
+        if pick is None:
+            _last_results = []
+            return gr.update(value="", visible=False), [], gr.update(choices=[], value=None), None
+
+        if pick.confidence == "low":
+            # No clear AI pick — fall back to raw top-K, no badge in the table
+            _last_results = engine.search(query, top_k=int(top_k), video_filter=vf)
+            anchor_index = None
+            anchor_md = gr.update(value="", visible=False)
+        else:
+            # Merge anchor into a single list — anchor first, density-boosted alternates after
+            _last_results = [pick.result] + pick.others
+            anchor_index = 0
+            badge = CONF_BADGE.get(pick.confidence, pick.confidence)
+            anchor_md = gr.update(
+                value=(
+                    f"**🌟 AI-picked teaching moment — {badge}**  \n"
+                    f"> {pick.reason}"
+                ),
+                visible=True,
+            )
+
+        rows = results_to_rows(_last_results, anchor_index=anchor_index)
+        choices = results_to_choices(_last_results, anchor_index=anchor_index)
         default_choice = choices[0] if choices else None
-        return rows, gr.update(choices=choices, value=default_choice), None
+        return anchor_md, rows, gr.update(choices=choices, value=default_choice), None
 
     def open_selected_result(choice: str | None):
         if not choice or not _last_results:
@@ -145,6 +180,9 @@ def build_app(engine: SearchEngine, videos_dir: Path):
                 top_k_slider = gr.Slider(1, 20, value=5, step=1, label="Results")
             with gr.Column(scale=1):
                 search_btn = gr.Button("🔍 Search", variant="primary")
+
+        # AI-picked anchor panel (visible only on high/medium confidence)
+        anchor_panel = gr.Markdown(value="", visible=False)
 
         # Results panel
         results_table = gr.Dataframe(
@@ -258,12 +296,12 @@ def build_app(engine: SearchEngine, videos_dir: Path):
         search_btn.click(
             fn=do_search,
             inputs=[query_box, top_k_slider, video_filter],
-            outputs=[results_table, selected_result, video_player],
+            outputs=[anchor_panel, results_table, selected_result, video_player],
         )
         query_box.submit(
             fn=do_search,
             inputs=[query_box, top_k_slider, video_filter],
-            outputs=[results_table, selected_result, video_player],
+            outputs=[anchor_panel, results_table, selected_result, video_player],
         )
         open_btn.click(
             fn=open_selected_result,

@@ -23,11 +23,11 @@ from tqdm import tqdm
 # Config
 # ─────────────────────────────────────────────
 
-TEXT_MODEL_NAME  = "paraphrase-multilingual-mpnet-base-v2"  # multilingual, 768-dim, supports Hebrew
-CHUNK_WINDOW_SEC = 15.0                  # cap chunk duration
-CHUNK_MAX_CHARS  = 500                   # cap chunk length in characters
+TEXT_MODEL_NAME  = "intfloat/multilingual-e5-large"  # 1024-dim, strong multilingual + technical
+CHUNK_WINDOW_SEC = 60.0                  # cap chunk duration (~1 thought per chunk)
+CHUNK_MAX_CHARS  = 1500                  # cap chunk length in characters
 CLIP_DIM         = 512                   # CLIP ViT-B/32 output size
-TEXT_DIM         = 768                   # mpnet-base output size
+TEXT_DIM         = 1024                  # e5-large output size
 
 # Collection names inside ChromaDB
 COLL_TEXT   = "text_chunks"    # ASR + OCR text with text embeddings
@@ -147,10 +147,11 @@ def build_text_index(
 
         texts = [c["text"] for c in all_chunks]
 
-        # Embed (batch for efficiency)
+        # Embed (batch for efficiency). e5-large requires the "passage: " prefix on documents.
+        prefixed = [f"passage: {t}" for t in texts]
         print(f"  [{video_id}] Embedding {len(texts)} text chunks …")
         embeddings = text_model.encode(
-            texts, batch_size=64, show_progress_bar=False,
+            prefixed, batch_size=32, show_progress_bar=False,
             normalize_embeddings=True,
         ).tolist()
 

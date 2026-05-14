@@ -8,9 +8,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-data/
+data/videos/
 videos/
-index/
 *.zip
 .env
 .env.*
+.DS_Store
+.claude/
