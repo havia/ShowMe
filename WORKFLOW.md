@@ -31,15 +31,29 @@ echo 'ANTHROPIC_API_KEY=sk-ant-api03-...' > .env
 
 ### Get the videos
 
-The ChromaDB references three videos by stem name. Download each from the course Drive into `data/videos/` and rename them to match:
+The ChromaDB references 12 videos by stem name. Download each from the course Drive into `data/videos/` and rename them to match the stem:
 
-| What to download | Save as |
+**Zvi lectures (7):**
+| Recording filename | Save as |
 |---|---|
+| `GMT20260329-142657_Recording_2560x1600.mp4` | `data/videos/zvi_lecture_2026-03-29.mp4` |
+| `GMT20260412-142338_Recording_2560x1600.mp4` | `data/videos/zvi_lecture_2026-04-12.mp4` |
+| `GMT20260415-142312_Recording_2560x1600.mp4` | `data/videos/zvi_lecture_2026-04-15.mp4` |
+| `GMT20260419-142536_Recording_3822x1600.mp4` | `data/videos/zvi_lecture_2026-04-19.mp4` |
 | `GMT20260426-142039_Recording_2560x1600.mp4` | `data/videos/zvi_lecture_2026-04-26.mp4` |
 | `GMT20260506-142150_Recording_2560x1600.mp4` | `data/videos/zvi_lecture_2026-05-06.mp4` |
 | `GMT20260510-142838_Recording_2560x1600.mp4` | `data/videos/zvi_lecture_2026-05-10.mp4` |
 
-The MP4s aren't in this repo (~2.8 GB total, and they belong to `huji-executives.org`). The VTT caption files are also unnecessary at this stage — the index is already built. You only need the MP4s for video playback in the UI.
+**Lev lectures (5):**
+| Recording filename | Save as |
+|---|---|
+| `GMT20260225-151837_Recording_3840x2160.mp4` | `data/videos/lev_lecture_2026-02-25.mp4` |
+| `GMT20260315-152527_Recording_3840x2400.mp4` | `data/videos/lev_lecture_2026-03-15.mp4` |
+| `GMT20260318-152255_Recording_3840x2160.mp4` | `data/videos/lev_lecture_2026-03-18.mp4` |
+| `GMT20260322-152110_Recording_3840x2160.mp4` | `data/videos/lev_lecture_2026-03-22.mp4` |
+| `GMT20260325-152624_Recording_3840x2160.mp4` | `data/videos/lev_lecture_2026-03-25.mp4` |
+
+The MP4s aren't in this repo (~11 GB total, and they belong to `huji-executives.org`). The VTT caption files are also unnecessary at this stage — the index is already built. You only need the MP4s for video playback in the UI.
 
 ### Run
 
@@ -229,21 +243,22 @@ The JS in `app.py:172-255` handles a Gradio quirk: when the video element is rep
 
 ## Data pipeline at scale
 
-**Current state (this session):**
-- 3 lectures × ~4h each ≈ 12 hours of video, 2.7 GB of MP4s
-- 759 text chunks indexed (avg ~253 per lecture)
-- 152 visual frame embeddings
-- Total ChromaDB on disk: ~30 MB
+**Current state:**
+- **12 lectures** × ~4h each ≈ 50 hours of video, ~11 GB of MP4s
+- **7 Zvi + 5 Lev** lectures spanning 2026-02-25 to 2026-05-10
+- **3,228 text chunks** indexed (avg ~269 per lecture)
+- **608 visual frame embeddings**
+- Total ChromaDB on disk: ~70 MB
 
 **Costs per lecture:**
 | Stage | Time | Cost |
 |---|---|---|
 | Download (gdown) | ~3 min | $0 |
 | Ingest (VTT + OCR + CLIP, CPU) | ~12 min | $0 |
-| Index re-run | <1 min | $0 |
-| **Per query** | <2s | ~$0.0015 (Haiku: expansion + anchor pick) |
+| Index re-run for all lectures | ~3 min | $0 |
+| **Per query** | ~2s | ~$0.0015 (Haiku: expansion + anchor pick) |
 
-For a full course of 30 lectures: ~7 hours of one-time ingest, ~$0.10/day of API at 50 queries/day.
+For a full course of 30 lectures: ~6 hours of one-time ingest, ~$0.10/day of API at 50 queries/day.
 
 ---
 

@@ -1,0 +1,102 @@
+[
+  {
+    "timestamp": 300.0,
+    "text": "AI Developers Course"
+  },
+  {
+    "timestamp": 600.0,
+    "text": "nIVi dhnja MnWjn 'iLD) ~IOT] JPJ Wpov ttono4zun \"r924 Mnunayuraversity Of JERUSALEM Lev Muchnik"
+  },
+  {
+    "timestamp": 1200.0,
+    "text": "9> 8 0 9 Lev Muchnik 0 7 POST SHALLOW WORD EMBEDDINGS F 0 Polysemy = multiple representations for the same word: e.g: ELMo model used multiple LSTMs that would: 3 4 Use bi-directional context to generate embeddings 2 0 z [ Multiple representations for each word 0 I i  | 0 0 I 0 6 0 8 Additional layers to pick the most relevant representation: Seq2seq: Encoder-decoder architecture to generate sequence of outputs from sequence of inputs (in analogy to LSTM) Transfer learning: fine-tune representations trained on huge (general) corpora (e.g: ULMFiT) Integrate pretrained model into downstream tasks by adding classification or text generation layers. Attention mechanism Deeper network architecture:"
+  },
+  {
+    "timestamp": 1800.0,
+    "text": "> 8 0 '93 mnavn ~iurjil IKJ Lev Muchnik NEURAL NETWORK FOR NEXT WORD PREDICTION croudsourced expensive outsources overlooked Output Layer Training is cheap; labeling is Deep Neural Network Classifier Classification Layers [hi] [hz] [ha] [h4_ [hs] [hoe] h Neural Network Cell Neural Network Cell Neural Network Cell Neural Network Cell Neural Network Cell Neural Network Cell Neural Network Cell Feature Engineering Layers [ho]l h2 [hal [ha_ [hs Input layer [CLS] [Training] [is] [cheap] [labeling] [is] Cow4s 0 rc"
+  },
+  {
+    "timestamp": 2100.0,
+    "text": "> 8 0 '93 Lev Muchnik co N SEQZSEQ ~ ENCODE-DECODER ARCHITECTURE L 7 morning <eos> Tasks handled by seq2seq architecture Translation Problem solving Chatbot Text summarization Part of speech tagging Named Entity Recognition Image captioning 8 hi hz ha h4 52 5 ho 2 <sos> guten morgen <eos> <sos> good morning Sutskever, Ilya, Oriol Vinyals, and Quoc V. Le: \"Sequence to sequence learning with neural networks_ Advances in neural information processing systems 27 (2014): good T|"
+  },
+  {
+    "timestamp": 3300.0,
+    "text": "9> mnavn ~iutjil IKJ 0 3 Lev Muchnik BERT (BIDIRECTIONAL ENCODER REPRESENTATIONS FROM TRANSFORMERS): TEXT PREPROCESSING (CONSTRUCTION OF EMBEDDINGS) BERT makes the input representation of each token position-aware by adding a position embedding (and a segment embedding) to the token embedding: 2 Text is represented with a combination of 3 embeddings: 0 Z [ 0 I i 0 0 I 0 6 0 8 Input [CLS] my dog is cute [SEP] he likes play ##ing [SEP] Token Embeddings E [CLS] E my E dog E \"Is E cute E [SEP] E he E llkes E play [SEP] Segment Embeddings E_ A E A E A E A E B E B E B E B Position Embeddings Eo E, Ez E3 E4 E6 E7 E8 Eg Elo_ Input Embeddingi Etokeni + Esegmenti + Epositioni Considering that the model is pretrained and text is tokenized in special way (e.g. special markers, stemming, _), each transformer model comes with a tokenizer: Eesing 8 8 6 <"
+  },
+  {
+    "timestamp": 3600.0,
+    "text": "> 8 0 9 mnavn FiditjilJKJ Lev Muchnik 6 7 CONTEXTUAL EMBEDDINGS 9 4 3 Representation of a word should be different for contexts Ja After the software update,the robot stopped responding it seems it caused a memory leak 1 Contextual embedding: each word has a different vector that expresses different meanings depending on the surrounding words 0 € I 0 2 [ Contextual embeddings are computed using embedding layer 0 I  ||  0 0 I 0 6 0 8 We train a neural network that learns to compute contextual embeddings from a base word embeddings by selectively integrating information from all other neighboring words The word \"attends to\" some neighboring words more than others, using weighted sum. Layer k 8 9 1 ! 9 2 I I 1 6 8 Self-attention distribution Layer k+1 4 9 1 1 9 2 I 1 1 6 8"
+  },
+  {
+    "timestamp": 4200.0,
+    "text": "mravn Cv Lev Muchnik Layer k 8 9 1 1 9 2 I[ I 1 [ 8 Self-attention distribution Layer k+1 4 9 1 1 9 2 I 1 1 6 8 0 2 [ 0 I i 0 0 I 0 6 0 8 Unidirectional Self-Attention Left-to-right attention X1 X2 X3 X4 Xs attention layer attention layer attention layer attention layer attention layer a2 a3 a4 a5 ~"
+  },
+  {
+    "timestamp": 4500.0,
+    "text": "4> 8 0 6 mnavn Lev Muchnik CO F TRANSFORMERS Output Propabililics Transformer Architecture Sofmax Integrates Attention layers with other layers to generate embeddings Relies on text preprocessing that injects positional information into a sequence (positional encoding): Implements several parallel attention heads (in analogy with several convolution filters in CNN) Each head can focus on a different of attention and aggregates embeddings differently E.g: syntax, verb tense, position Outputs of different heads are concatenated & projected on final layer embedding Many models released in several variants. E.g: BERT Base  12 heads, BERT Large 24 heads. Training is implemented as seq2seq problem: transform sequence into a sequence: Linear Add & Norm Feed Forward 8 Add& Nomm Multi-Head Attention Add& Nomm Feed Forward Nx Add&No Masked Multi-H Iead Aitention Nx Add&Nom Multi-Head Attenticn Positional Encocing Positional Encoding Input Output Embedd ng Embedding_ Vaswani, A , Shazeer; N., Parmar; N., Uszkoreit; J., Jones, L\", Gomez, A N., & Polosukhin; I. (2017). Attention is all you need. Advances in neural information processing systems, 30. Inputs Ouipuls (shifted right)"
+  },
+  {
+    "timestamp": 4800.0,
+    "text": "9> 8 0 9 mnavn Lev Muchnik 80 3 MULTI-HEAD ATTENTION 9 1 Hidden states Linear layer Hidden Size Hidden Size Attention head Concatenate 'How= 2 2 0 z [ 0 I i 0 0 I 0 6 8 Hidden states 'are' Attention head you' 'doing' Hidden states Combined hidden states (2' Attention head https ]newslettertheaiedge iolplthe-multi-head-attention-mechanism"
+  },
+  {
+    "timestamp": 5100.0,
+    "text": "V> 8 0 9} nnaun FiuirilJiJ Lev Muchnik 3 7 BERT TRAINING FOR WORD EMBEDDINGS: MASKED LANGUAGE MODELLING (MLM) 2 0 7 U A Bidirectional Masked Language Modelling (MLM) Ioutpu: Task: predict masked word: J 93y Ub rigtes probab lity YUU lney. Your . (ClS] hox Rc cory Iccay [3371 0 0 I 0 6 8 Input preprocessing: BERT masked language model Pick 15% of the words (at random): 80% replace with [MASK] 10% replace with a random word 10% leave unchanged Input [CLSI hox Jc Mn cora Iccay [3p1 CLS tag _ (classification) indicates beginning of a sentence / text segment being classified"
+  },
+  {
+    "timestamp": 5700.0,
+    "text": "> nnaun 9 Lev Muchhik BERT TRAINING FOR QUESTION ANSWERING AND TEXT GENERATION TASKS 4 7 INPUT (Tokenized) [CLS] this is [MASK] to be [CLS] Predict next sentence (NSP) this 2 Sentence-A is 3 8 Task: given two sentences, assess whether the second sentence actually follows the first one. 3 IMASKI s0 [SEP] that [MASK] am done doing [SEP] t0 8 95% !Next 4F 5% IsNext 2 BERT be So Sentence-B [SEP] Predicting likelihood of sentence-B coming after sentence-A 512 612 X| |"
+  },
+  {
+    "timestamp": 6000.0,
+    "text": "7JVi \"OT] JPJ pdQuiNn {OF JERUGALEM Lev Muchnik |"
+  },
+  {
+    "timestamp": 6300.0,
+    "text": "Lev Muchnik"
+  },
+  {
+    "timestamp": 7200.0,
+    "text": "mnavn ~iutjiJKJ pip install transformer Lev Muchnik https  [huggingface coL HUGGING FACE TRANSFORMER LIBRARY 2 6 A 3 Hugging Face Transformers Library 2 2 An open-source library for state-of-the-art Natural Language Processing (NLP) 0 z [ 0 I T  | Provides easy-to-use interfaces to work with pre-trained models 0 0 I 0 6 0 8 Supports various NLP tasks: text classification, named entity recognition, question answering, and more Key Features: Large collection of pre-trained models Support for PyTorch and TensorFlow Easy fine-tuning for specific tasks Consistent API across different model architectures Pretrained Hugging Face NLP models come with: Hugging Face also hosts variety of open datasets (pip install datasets) Tokenizer (that also includes dictionary) Model implemented in pytorch or tf"
+  },
+  {
+    "timestamp": 7500.0,
+    "text": "https //huggingface co/models Inuon ^\"oun Models Hugging Face Hugging Face Search models, datasets, users .- Models Datasets B Spaces Buckets NEW Docs Pricing Lev Muchnik New tab Ctrl+T Main Tasks Libraries Languages Licenses Other Models   2,728,368 Filter by name Full-text search Inference Available Tl Sort: Trending HauhauCS/Qwen3 . 5-35B-A3B-Uncensored-HauhauCS-Aggressive Image-Text-to-Text #35B Updated 12 days ago ~276k 782 Filter Tasks by name Multimodal 47} Audio-Text-to-Text Image-Text-to-Text Jackrong/Qwen3 5-27B-Claude-4.6-Opus-Reasoning-Distilled Text Generation 8 28B Updated 1 day ago ~l4lk 1.02k Ez Image-Text-to-Image Ea Image-Text-to-Video [Q7 Visual Question Answering M mistralai/Mistral-Small-4-119B-2603 119B Updated 5 days ago ~10.3k 286 Eo Document Question Answering [3 Video-Text-to-Text baidu/Qianfan-OCR D Image-Text-to-Text SB Updated 3 days ago 15.48k Visual Document Retrieval Any-to-Any 286 Computer Vision Depth Estimation Image Classification fishaudio/s2-pro CO Text-to-Speech #SB Updated 11 days ago ~12.3k 702 Lp Object Detection Image Segmentation Text-to-Image Image-to-Text RoyalCities/Foundation-1 Updated 6 days ago 223 Image-to-Image Image-to-Video Unconditional Image Generation nvidia/Nemotron-Cascade-2-30B-A3B Text Generation 32B Updated about 18 hours ago 13.31k nvidia/Nemotron-Cascade 30B-A3B 184 Video Classification LC Text-to-Video Zero-Shot Image Classification Mask Generation 7 zai-Org/GLM-OCR E Image-to-Text Updated 10 days ago ~3.2M 1.42k Zero-Shot Object Detection Text-to-3D 5 Image-to-3D [S Image Feature Extraction HauhauCS/Qwen3. 5-9B-Uncensored-HauhauCS-Aggressive 9B Updated 19 days ago ~350k 604 Keypoint Detection Video-to-Video https: / /huggingface co/nvidia/Nemotron-Cascade-2-30B-A3B !g"
+  },
+  {
+    "timestamp": 10800.0,
+    "text": "nua muonanavn ~utjil IrJ Recycle Bin Lev Muchhik Total wsl.txt Command_ GitHub Desktop Mephisto Copy Task Manager Mystique File Options View Processes Performance Users Details   Services HS 0% CPU 4% Memory 18.2 MB Name Status HeidiSQL cloudflared 0.3% System interrupts 0.1% MB WMI Provider Host 0% 10.8 MB Shredder Task Manager 0% 19.6 MB Service Host: Diagnostic Policy 0% 15.7 MB RDP Clipboard Monitor 0% 24 MB Microsoft Edge (18) 0% 1,198.5 MB Magneto Windows Defender Advanced T, 0% 121.2 MB Microsoft Network Realtime Ins_ 0% 19.2 MB System 0% 0.1 MB LM Studio Windows Defender Advanced 0% 17.7 MB LM Studio 0% 123.1 MB Service Host: DNS Client 0% 24 MB Service Host: Remote Desktop $_ 0% 177.2 MB Loki Antimalware Seriice Fxecutable Oo 26Z0 MB Fewer details End task Mephisto Jupyter Notebook 8.21 PM cts ENG 3/22/2026 AI Inbox (3,302) lev__ Claude Connect Br_ Loki 132.64.196.5_ Task Manager F3"
+  },
+  {
+    "timestamp": 11100.0,
+    "text": "nJVi phnup mnWjn 'JiLD) ~IOT] JPJ IpOv tunonqn n*i724M Menemahuninersity Of JERUSALEM Lev Muchnik"
+  },
+  {
+    "timestamp": 11400.0,
+    "text": "Alexandra Yalov"
+  },
+  {
+    "timestamp": 12000.0,
+    "text": "n*IVil Ijn \"oi} JPJ (D) En npotTit NesITY OF JERUSALEM Lev Muchnik |"
+  },
+  {
+    "timestamp": 12300.0,
+    "text": "132.64.196.58 Transformers File Edit Selection View Go Run 08 Embeddings ipynb Zero-shot classification ipynb embeddings_transformers ipynb Transformers-Demonstrationipynb Transformers-Classifier-FineTunning-ipynb X Transformers-Classifier-FineTunning ipynb M! Demonstrate use of transformers with HuggingFace library Ml Text classification: out of the box M Compute predictions for the entire test set > 4 Generate + Code + Markdown Run All 0 Restart X Clear AIl Outputs Jupyter Variables Outline wZvecmd Lev Muchnik votes_predictedheado base (Python 3.12.4) 1 ds ReviewsDataset(texts data[ 'review' ], sentiment 2 res list(text_classifier(ds1, truncation-True) ) None) raw 1 votes_predicted.head [13] Python label score vote predicted_vote predicted_vote_value 0 NEGATIVE 0.825068 ~0.825068 POSITIVE 0.999253 0.999253 2 POSITIVE 0.999064 0.999064 3 NEGATIVE 0.994191 ~0.994191 4 POSITIVE 0.999079 0.999079 1 votes_predicted[ [ 'vote ) 'predicted vote value' ]].corr [14] Python vote predicted_vote_value vote 1.000000 0.793748 predicted_vote_value 0.793748 1.000000 Launchpad ^ 0 Live Share B select Postgres Server Update is ready; click to restart: Auto-Import Completions: false Auto-Import Completions: false {} Ai Total Commander (x6_ extract_year py com. Transformers-Classifie__. lev@Loki: ~/projects] _ Cell 25 of 63 0 chars inserted Connect to MSSQL 15] 8.46 PM mebamnavn"
+  },
+  {
+    "timestamp": 13800.0,
+    "text": "9> mnavn O V Lev Muchnik pip install sentence-transformers SENTENCE TRANSFORMERS LIBRARY sentenceEmbeddings Quora ipynb Transformers Animals Embeddings ipynb Un L Typical transformer-based embeddings models generate sequences of embeddings: outputs 2 To represent the entire sentence, one should: 2 Either use [CLS] token (automatically prepended to sequences of tokens), hthat cannot be used directly to represent texts. I| | E.g:: text_embedding = outputs last_hidden_statel:, 0, :] 0 0 I 0 6 0 8 Or pool all token vectors into a single vector (mean, max or attention-based Averaging): Use specialized sentence paragraph embeddings models: text_embedding = outputs last_hidden_state mean(dim-1) text_embedding; F outputslast_hidden_state max(dim-1) attention_weights = torch nn functional softmax(outputs attention_weights, dim-1) text_embedding = torch sum(attention_weights outputslast_hidden_state, dim-1) Sentence-transformers library simplifies sentence ~ level operations (inference and fine-tuning) Model Selection: https  /huggingface co/spaces/mteblleaderboard"
+  },
+  {
+    "timestamp": 14100.0,
+    "text": "File Edit Selection View Go Run Terminal Help 132.64.196.196 0  X 08 mtonanavn FiutjilJKJ TRANSFORMERS C8 € C 0 SentenceEmbeddings Quoraipynb X Transformers Animals Embeddingsipynb Zero-shot classification ipynb SentenceEmbeddings Quora ipynb M! Quora question embedding with Sentence Transformer M! Sentense transformers models: 4 Generate 4 Code 4 Markdown Run AII 0 Restart X Clear AIl Outputs Jupyter Variables Outline 8 import mawpLOtIO . pypot as pIt, 0S 9 embeddings_transformers ipynb Transformers-Demonstration ipyn\" local_data embeddings_transformers ipynb SentenceEmbeddings Quora.ipynb Transformers Animals - Embeddings ipynb Transformers-Classifier-FineTunning-ipynb Transformers-Demonstration ipynb Zero-shot classificationipynb Lev Muchnik base (Python 3.12.4) 10 11 import torch 12 device = torch.device( 'cuda:0' if torch.cuda.is_available( ) else \"cpu\" ) 13 print(f\"Will be training on {device}\") 14 # configure logger _ Can be logging. Info or logging.Error to control printouts during tra 15 root_notebook_folder = 0S . path.abspath(r' . 16 data_folder = OS . path. join(root_notebook_folder , local_data/quora' ) 17 data_folder [1] Python Will be training on cuda:0 e: | Projects| |Lev|   ITeaching AI Engineering Transformers ITransformers Ilocal_data/quora B Sentense transformers models: https: / www sbert net-docs/pretrained_modelshtml sentence-transformers/all-mpnet-base-V2 I paraphrase-MiniLM-L6-v2 = paraphrase-MiniLM-L3-v2 1 model_ name 2 model name 3 model name [2] Python Launchpad 1 Ao Live Share B select Postgres Server Update is ready; click to restart: AI Total Commander (x6_ BAAI/bge-m3 . Huggi_ extract_yearpy com. SentenceEmbeddings lev@Loki: ~/projects]_ Auto-Import Completions: false Auto-Import Completions: false Auto-Import Completions: false Cell 3 of 24 chars inserted Connect to MSSQL 15] 9.16 PM"
+  },
+  {
+    "timestamp": 14400.0,
+    "text": "132.64.196.58 https / /huggingface.co/spaces/mteb/leaderboard English Lev Muchnik Pretrained Models - Sentence MTEB ( Multilingual , v2) Pretrained Models - Sentence Human Benchmark MTEB eaderboard Huggin A large-scale multilingual expansion of MTEB , driven mainly by highly-curated community contributions covering 250+ languages Number of languages 1038 Number of tasks 131 Number of task types: Number of domains 20 Cite and share this benchmark BAAl/bge-m3 . Hugging Face Image New tab Ctrl+T Customize this Benchmark Audio Advanced Model Filters Domain-Specific Click for More_Info Language-specific Summary Performance per Model Size Performance over Time Performance per Task Type Performance per task Performance per language Task information Miscellaneous Filter_ Retrieval Rank Bor_ Model Zero-shot Active Para  Total Param:_ Embedding D= Max Tokens Mean (T_ Mean (TaskT. Bitext Classification Clu KaLM-Embedding_Gemma3-12B_ 2511 RTEB Multilingual 739 10 . 8 11.8 3840 32768 72.32 62.51 83.76 77 . 88 55 RTEB English Llama-embedlpemotron-8b 998 7 0 7.5 4096 32768 69.46 61 09 81.72 73.21 54 Qwen3-Embedding_8B 998 7.6 4096 32768 70 . 58 61.69 80.89 74.00 57 Image ViDoRe V3 gemini embedding_001 999 3072 2048 68.37 59.59 79 .28 71.82 54 Qwen3 Embedding-4B 999 3 6 4 0 2560 32768 69.45 60.86 79.36 72.33 57 Jina Visual Document Retrieval Octen- Embedding-8B 999 6 9 7 .6 4096 32768 67.84 60 .28 80.35 66.68 55 _ Other EZLLM-V2-14B 889 13 2 14 0 5120 40960 68.74 59.45 77 . 15 73 . 00 60 Domain-Specific EZLLM_v2-8B 889 7 .6 4096 40960 68.09 58.99 75.96 71.93 60 SeedL_6-embedding_1215 899 2048 32768 70.26 61.34 78 . 68 76. 75 56 Language-specific 10 EZLLM-v2-4B 889 3 6 4 2560 40960 67 06 58.25 74.49 70. 73 59 Miscellaneous jina-embeddings-V5-text_ sma] 11 NA 0. 440 0.596 1024 32768 67 00 58.90 69.71 71.32 53 Download Table Frequently Asked Questions https / /huggingface co/nvidia/llama-embed-nemotron-8b Acknowledgment: We thank Google Contextual AI, Laude Institute ServiceNow and Hugging_ Face for their generous sponsorship If you AI Ei Total Commander (x6_ MTEB Leaderboard extract_yearpy com. Transformers Animal__. lev@Loki: ~/projects]_ like to sponsor uS please get in touch ^ 137 9.21 PM mtoaaavn"
+  },
+  {
+    "timestamp": 14700.0,
+    "text": "132.64.196.58 mnavn ~iutilJrJ https / /huggingface.co/spaces Hugging Face Models Datasets Spaces Buckets NEW Docs Enterprise Pricing Lev Muchnik Pretrained Models - Sentence Models Pretrained Models - Sentence Spaces Hugging Face Qwen / Qwen3 5-35B-A3B Spaces New Space Get PRO Learn more BAAlbge-m3 . Hugging Face Jackrong Qwen3 5-27B-Claude-4 6-Opus- Reasoning-D New tab Ctrl+T Qwen_ Qwen3 5-9B Ask anything yol Hauhaucs Qwen3 5 - 35B-A3B Uncensored-Hauhaucs-Agg- Qwen_ Qwen3 5-27B unsloth/Qwen3 5-35B-A3B-GGUF Image Geni Datasets Reachy new slation Speech Synthesis 3D Modeling Object Detection Text Analysis Image Editing Code Generation Question Answering Data Visua nohurry_ Opus-4.6 - Reasoning-3o0Ox-filtered Spaces of the wee peteromallet/dataclaw-peteromallet Filter by name Filters (0) 1l Sort: Relevance stepfun-ai_ Step-3 5-Flash-SFT Running Featured 103 Running on * ZERO MCP Featured 89 Running Featured 41 Spaces r3gm/wan2-2-fp8da-aoti-preview Voxtral Realtime We Real-time speech transcrip FLUX.2 Klein 9B KV Generate or edit images from text and optional photos Tensorbend Chat with Al using custom language models FrameAI4687/Omni-Video-Factory sing Fish Audio S2 Pro multimodalart/qwen-image-multiple-angles- 3d-c_ mistralai Organizations 11 days ago black-forest-labs 10 days ago ExObit 8 days ago DeepSeek Running on * ZERO Featured 51 Running on * ZERO Featured 19 Running on * ZERO Featured 28 Hugging Face 0 Meta Llama LTX 2.3 First-Last Fra\" Generate video with audid Use Full-text search TADA _ Text-Acoustic Dual Alignment for Speech Speech generation from text and acoustic reference DVD Official demo of DVD (https:I Idvd-project github io/) in-browser with linoyts 12 days ago  webml community 13 days- ago fffiloni days ; ago haodongli days ago All running apps, trending first Running on * ZERO MCP 1.46k Running on * ZERO MCP Featured 395 Running 226 Running on * ZERO 110 Wan2.2 14B Preview generate a video from an image with a text prompt FireRed Image Edit 1.0 Fast FireRed-Image-Edit Qwen-Image-Edit-Rapid (Transformers) Free Unlimited Google Veo 3 Free Unlimited Google Veo-3 NSFW Uncensored DLSS 5 Anything Turn any image into a DLSS 5 meme (using FLUX.2-klein- 9b-kv) 29 days ago prithivMLmods days - ago deddytoyota Oct 2025 victor days ago Running on * ZERO Featured 656 Running on * ZERO MCP 2.62k Running Featured 5.01k Running on * ZERO Featured 103 0 Ai Ed Total Commander (x6_ Spaces - Hugging Fac__ extract_yearpy com. Transformers Animal__. lev@Loki: ~/projects]_ 1 9.26 PM 13gm"
+  }
+]

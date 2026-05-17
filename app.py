@@ -223,7 +223,8 @@ def build_app(engine: SearchEngine, videos_dir: Path):
         if (!Number.isFinite(target)) return;
         try {
             video.currentTime = Math.max(0, target);
-            video.play().catch(function () {});
+            // Don't auto-play: browsers force programmatic .play() to be muted
+            // until the user interacts with the page. Let the user press play.
         } catch (e) {}
     }
 
