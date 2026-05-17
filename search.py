@@ -50,6 +50,20 @@ ANCHOR_CANDIDATE_K    = 15   # how many results to give the LLM to choose from
 ANCHOR_MAX_TOKENS     = 400
 DENSITY_DECAY_SEC     = 300.0  # exp decay scale for the "neighbors nearby" boost
 
+ANSWER_MAX_TOKENS     = 600
+ANSWER_SYSTEM_PROMPT = """אתה עוזר ללומדים בקורס AI Engineering. תקבל שאילתת חיפוש של סטודנט ורשימה ממוספרת של קטעים מתומללים מהרצאות וידאו (כולל זמן וזיהוי הרצאה).
+
+תפקידך: לכתוב תשובה קצרה בעברית (2-5 משפטים) שמסכמת מה המרצה הסביר על הנושא, **רק** על סמך הקטעים שניתנו. אל תמציא מידע שאינו בקטעים.
+
+חוקים:
+1. כתוב בעברית בלבד, גם אם השאילתה באנגלית.
+2. בכל פעם שאתה מסתמך על קטע, הוסף ציטוט בפורמט [HH:MM:SS] מיד אחרי המשפט. אם רוצה לציין מספר זמנים, חזור על הפורמט: [02:13:15] [02:15:00].
+3. אם הקטעים אינם מספקים תשובה ברורה, כתוב "המרצה מזכיר את הנושא אך לא נותן הסבר מפורט בקטעים שנמצאו" וצטט את הזמן הרלוונטי ביותר.
+4. אל תפנה לקטעים לפי מספר ("קטע 3"), אלא לפי הזמן בלבד.
+5. הקפד על קוהרנטיות: אם שני קטעים סותרים, ציין את שניהם בקצרה.
+
+החזר טקסט בלבד, ללא JSON, ללא code fences."""
+
 QUERY_EXPANSION_MAX_VARIANTS = 4
 QUERY_EXPANSION_TOOL = {
     "name": "expand_query",
@@ -135,6 +149,7 @@ class AnchorPick:
     reason:     str              # short Hebrew reason from the LLM
     confidence: str              # "high" | "medium" | "low"
     others:     list[SearchResult]  # the remaining candidates the LLM saw
+    answer:     str = ""         # generated Hebrew RAG answer with [HH:MM:SS] citations
 
 
 ANCHOR_SYSTEM_PROMPT = """אתה עוזר לזהות את הרגע המדויק בהרצאה שבו המרצה **מתחיל להסביר** נושא מסוים.
@@ -497,6 +512,45 @@ class SearchEngine:
         boosted.sort(key=lambda r: -r.score)
         return boosted
 
+    def _generate_answer(
+        self,
+        query: str,
+        chunks: list[SearchResult],
+        client: Anthropic,
+    ) -> str:
+        """Generate a short Hebrew answer grounded in the retrieved chunks.
+        Inline citations use [HH:MM:SS] format so the UI can hyperlink them
+        to video seeks."""
+        if not chunks or client is None:
+            return ""
+
+        lines = []
+        for c in chunks:
+            ts = _hms(c.start)
+            snippet = c.text.replace("\n", " ").strip()[:400]
+            lines.append(f"[{ts}] ({c.video_id}, {c.source}) {snippet}")
+        evidence = "\n".join(lines)
+        user_msg = f"שאילתת חיפוש: {query}\n\nקטעים זמינים:\n{evidence}"
+
+        try:
+            resp = client.messages.create(
+                model=ANCHOR_MODEL,
+                max_tokens=ANSWER_MAX_TOKENS,
+                system=[
+                    {
+                        "type": "text",
+                        "text": ANSWER_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            text_block = next((b for b in resp.content if getattr(b, "type", None) == "text"), None)
+            return text_block.text.strip() if text_block else ""
+        except Exception as e:
+            print(f"[search] _generate_answer failed: {e}")
+            return ""
+
     def find_anchor(
         self,
         query: str,
@@ -559,11 +613,14 @@ class SearchEngine:
             # clusters of nearby moments float up.
             remaining = [c for i, c in enumerate(candidates) if i != idx]
             others = self._density_boosted(remaining)[:top_k_display]
+            # Generate the Hebrew RAG answer from the chosen + top alternatives.
+            answer = self._generate_answer(query, [chosen] + others, client)
             return AnchorPick(
                 result=chosen,
                 reason=(pick.get("reason") or "").strip(),
                 confidence=pick.get("confidence", "medium"),
                 others=others,
+                answer=answer,
             )
         except Exception as e:
             print(f"[search] find_anchor failed: {e}")

@@ -103,16 +103,49 @@ def build_app(engine: SearchEngine, videos_dir: Path):
 
     CONF_BADGE = {"high": "🟢 high", "medium": "🟡 medium", "low": "🔴 low"}
 
-    def do_search(query: str, top_k: int, video_filter: str):
+    def linkify_timestamps(text: str) -> str:
+        """Turn [HH:MM:SS] markers in the answer into clickable seek links.
+        Clicking dispatches a custom event that the JS handler picks up."""
+        import re
+        def _sub(m: re.Match) -> str:
+            ts_text = m.group(1)
+            parts = [int(x) for x in ts_text.split(":")]
+            if len(parts) == 3:
+                sec = parts[0] * 3600 + parts[1] * 60 + parts[2]
+            elif len(parts) == 2:
+                sec = parts[0] * 60 + parts[1]
+            else:
+                return m.group(0)
+            return (
+                f'<a href="javascript:void(0)" '
+                f'onclick="window.__showmeSeekTo({sec})" '
+                f'style="color:#1a73e8; text-decoration:underline; cursor:pointer; '
+                f'font-family:monospace; background:#eef3fc; padding:1px 4px; border-radius:3px;">'
+                f'[{ts_text}]</a>'
+            )
+        return re.sub(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]", _sub, text)
+
+    def do_search(query: str, top_k: int, video_filter: str, progress=gr.Progress()):
         nonlocal _last_results
         if not query.strip():
-            return gr.update(value="", visible=False), [], gr.update(choices=[], value=None), None
+            return (
+                gr.update(value="", visible=False),
+                gr.update(value="", visible=False),
+                [], gr.update(choices=[], value=None), None,
+            )
 
+        progress(0.1, desc="מרחיב את השאילתה (Hebrew + English)…")
         vf = video_filter if video_filter and video_filter != "All videos" else None
+        progress(0.3, desc="מאחזר קטעים רלוונטיים…")
         pick = engine.find_anchor(query, top_k_display=int(top_k), video_filter=vf)
+        progress(0.9, desc="מארגן תוצאות…")
         if pick is None:
             _last_results = []
-            return gr.update(value="", visible=False), [], gr.update(choices=[], value=None), None
+            return (
+                gr.update(value="", visible=False),
+                gr.update(value="", visible=False),
+                [], gr.update(choices=[], value=None), None,
+            )
 
         if pick.confidence == "low":
             # No clear AI pick — fall back to raw top-K, no badge in the table
@@ -132,10 +165,30 @@ def build_app(engine: SearchEngine, videos_dir: Path):
                 visible=True,
             )
 
+        # RAG answer panel — Hebrew summary with clickable [HH:MM:SS] citations.
+        # Inherits color from the surrounding theme (light or dark); only the
+        # accent stripe is colored.
+        if pick.answer:
+            answer_html = linkify_timestamps(pick.answer)
+            answer_md = gr.update(
+                value=(
+                    f'<div dir="rtl" style="border-left:4px solid var(--color-accent, #1a73e8); '
+                    f'padding:12px 16px; border-radius:4px; line-height:1.6; '
+                    f'color:inherit;">'
+                    f'<div style="font-weight:bold; color:var(--color-accent, #1a73e8); '
+                    f'margin-bottom:6px;">'
+                    f'🤖 תשובת RAG מבוססת על קטעי ההרצאה</div>'
+                    f'<div style="color:inherit;">{answer_html}</div></div>'
+                ),
+                visible=True,
+            )
+        else:
+            answer_md = gr.update(value="", visible=False)
+
         rows = results_to_rows(_last_results, anchor_index=anchor_index)
         choices = results_to_choices(_last_results, anchor_index=anchor_index)
         default_choice = choices[0] if choices else None
-        return anchor_md, rows, gr.update(choices=choices, value=default_choice), None
+        return answer_md, anchor_md, rows, gr.update(choices=choices, value=default_choice), None
 
     def open_selected_result(choice: str | None):
         if not choice or not _last_results:
@@ -164,22 +217,26 @@ def build_app(engine: SearchEngine, videos_dir: Path):
         )
 
         with gr.Row():
-            with gr.Column(scale=3):
+            with gr.Column(scale=5):
                 query_box = gr.Textbox(
                     placeholder='e.g. "RAG", "self-attention", "transformer architecture"',
                     label="Search phrase",
                     lines=1,
                 )
-            with gr.Column(scale=1):
+            with gr.Column(scale=1, min_width=120):
+                search_btn = gr.Button("🔍 Search", variant="primary")
+
+        with gr.Accordion("⚙ Settings", open=False):
+            with gr.Row():
                 video_filter = gr.Dropdown(
                     choices=["All videos"] + list(video_map.keys()),
                     value="All videos",
                     label="Filter by video",
                 )
-            with gr.Column(scale=1):
-                top_k_slider = gr.Slider(1, 20, value=5, step=1, label="Results")
-            with gr.Column(scale=1):
-                search_btn = gr.Button("🔍 Search", variant="primary")
+                top_k_slider = gr.Slider(1, 20, value=5, step=1, label="Number of results")
+
+        # RAG answer panel (visible whenever we have an LLM-generated answer)
+        answer_panel = gr.HTML(value="", visible=False)
 
         # AI-picked anchor panel (visible only on high/medium confidence)
         anchor_panel = gr.Markdown(value="", visible=False)
@@ -211,83 +268,143 @@ def build_app(engine: SearchEngine, videos_dir: Path):
             """
 <script>
 (function () {
-    if (window.__showmeSeekInstalledV3) return;
-    window.__showmeSeekInstalledV3 = true;
-    window.__showmeSeekTarget = null;
-    window.__showmeSeekToken = 0;
+    if (window.__showmeSeekInstalledV4) return;
+    window.__showmeSeekInstalledV4 = true;
 
-    function applySeek(video, token) {
-        if (!video) return;
-        if (token !== window.__showmeSeekToken) return;
+    // Target timestamp we want the next-loaded video to seek to.
+    window.__showmeSeekTarget = null;
+    window.__showmeSeekTargetSrc = null;  // which video URL this target applies to (or null = any)
+
+    function log() { try { console.log.apply(console, ['[showme]'].concat([].slice.call(arguments))); } catch (e) {} }
+
+    function doSeekAndPlay(video) {
         var target = Number(window.__showmeSeekTarget);
-        if (!Number.isFinite(target)) return;
+        if (!Number.isFinite(target)) return false;
         try {
+            log('seeking to', target, 'on video src=', video.currentSrc || video.src);
+            // Set currentTime first; then unmute; then play.
             video.currentTime = Math.max(0, target);
-            // Don't auto-play: browsers force programmatic .play() to be muted
-            // until the user interacts with the page. Let the user press play.
-        } catch (e) {}
+            video.muted = false;
+            var p = video.play();
+            if (p && typeof p.catch === 'function') {
+                p.catch(function (err) {
+                    log('play-with-sound blocked, retrying muted:', err && err.name);
+                    video.muted = true;
+                    video.play().catch(function () {});
+                });
+            }
+            return true;
+        } catch (e) {
+            log('seek failed:', e);
+            return false;
+        }
     }
 
-    window.__showmeSeekApply = function () {
-        var token = window.__showmeSeekToken;
-        var tries = 0;
-        var lastSrc = null;
-        var timer = setInterval(function () {
-            tries += 1;
-            if (tries > 160 || token !== window.__showmeSeekToken) {
-                clearInterval(timer);
-                return;
-            }
+    // Attempt the seek on a video. If readyState < 1 (no metadata), wait.
+    // If readyState >= 1, seek now AND on the next 'canplay' (in case the
+    // first currentTime= got rejected because src hadn't fully loaded).
+    function applyToVideo(video) {
+        if (!video) return;
+        if (video.__showmeSeekDone === window.__showmeSeekTarget) return;  // idempotent
+        video.__showmeSeekDone = window.__showmeSeekTarget;
 
-            var video = document.querySelector('video');
-            if (!video) return;
+        var onReady = function () {
+            video.removeEventListener('loadedmetadata', onReady);
+            video.removeEventListener('canplay', onReady);
+            // Try seek now. Then again after a tick (some browsers need it).
+            doSeekAndPlay(video);
+            setTimeout(function () { doSeekAndPlay(video); }, 50);
+        };
 
-            if (video.src !== lastSrc) {
-                lastSrc = video.src;
-                video.addEventListener('loadedmetadata', function onMeta() {
-                    video.removeEventListener('loadedmetadata', onMeta);
-                    applySeek(video, token);
-                });
-            }
-
-            if (video.readyState >= 1) {
-                applySeek(video, token);
-            }
-        }, 100);
-    };
-
-        function parseChoiceTime(text) {
-                if (!text) return null;
-                var m = text.match(/^\s*(\d+)\.\s+((?:\d{1,2}:)?\d{1,2}:\d{2})\s+\|/);
-                if (!m) return null;
-                var ts = m[2];
-                var parts = ts.split(':').map(function (x) { return parseInt(x, 10); });
-                if (parts.length === 2) return parts[0] * 60 + parts[1];
-                if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-                return null;
+        if (video.readyState >= 1) {
+            // Metadata already there
+            doSeekAndPlay(video);
+        } else {
+            video.addEventListener('loadedmetadata', onReady, { once: true });
+            video.addEventListener('canplay', onReady, { once: true });
         }
+    }
 
-        function getSelectedChoiceText() {
-                var input = document.querySelector('#selected_result input');
-                return input ? input.value : null;
+    // Watch the DOM for video elements appearing/changing.
+    function attachToAllVideos() {
+        var videos = document.querySelectorAll('video');
+        for (var i = 0; i < videos.length; i++) {
+            var v = videos[i];
+            if (v.__showmeSeekObserved) continue;
+            v.__showmeSeekObserved = true;
+            log('attached to video', v);
+            // When src changes (Gradio loads a new file into the same element)
+            // reset the seek-done flag so we'll re-seek for the new src.
+            var resetSeek = function () { this.__showmeSeekDone = null; applyToVideo(this); };
+            v.addEventListener('loadstart', resetSeek);
+            v.addEventListener('emptied', resetSeek);
+            v.addEventListener('loadedmetadata', function () { applyToVideo(this); });
+            applyToVideo(v);
         }
+    }
 
-        function installOpenHandler() {
-                var btn = document.querySelector('#open_result_btn button');
-                if (!btn || btn.__showmeSeekBound) return;
-                btn.__showmeSeekBound = true;
-                btn.addEventListener('click', function () {
-                        var choice = getSelectedChoiceText();
-                        var sec = parseChoiceTime(choice);
-                        if (sec === null) return;
-                        window.__showmeSeekTarget = sec;
-                        window.__showmeSeekToken = (window.__showmeSeekToken || 0) + 1;
-                        setTimeout(function () { if (window.__showmeSeekApply) window.__showmeSeekApply(); }, 120);
-                        setTimeout(function () { if (window.__showmeSeekApply) window.__showmeSeekApply(); }, 800);
-                });
+    // Watch for new video elements being added to the DOM.
+    var mo = new MutationObserver(function () { attachToAllVideos(); });
+    mo.observe(document.body, { childList: true, subtree: true });
+    attachToAllVideos();
+    // Also poll periodically in case the MutationObserver misses a swap.
+    setInterval(attachToAllVideos, 500);
+
+    // ── Choice parsing (anchor row in the dropdown) ──
+    function parseChoiceTime(text) {
+        if (!text) return null;
+        var m = text.match(/(\d{1,2}):(\d{2}):(\d{2})/) || text.match(/(\d{1,2}):(\d{2})/);
+        if (!m) return null;
+        if (m.length === 4) return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+        return (+m[1]) * 60 + (+m[2]);
+    }
+
+    function getSelectedChoiceText() {
+        var input = document.querySelector('#selected_result input');
+        return input ? input.value : null;
+    }
+
+    function triggerSeekFromChoice() {
+        var choice = getSelectedChoiceText();
+        var sec = parseChoiceTime(choice);
+        if (sec === null) {
+            log('no parsable time in choice:', choice);
+            return;
         }
+        log('user requested seek to', sec, 'from choice:', choice);
+        seekTo(sec);
+    }
 
-        setInterval(installOpenHandler, 300);
+    // Programmatic seek-to-time, callable from inline onclick handlers in the
+    // RAG answer's [HH:MM:SS] citation links.
+    function seekTo(sec) {
+        if (!Number.isFinite(sec)) return;
+        window.__showmeSeekTarget = sec;
+        var vids = document.querySelectorAll('video');
+        for (var i = 0; i < vids.length; i++) {
+            vids[i].__showmeSeekDone = null;
+            applyToVideo(vids[i]);
+        }
+    }
+    window.__showmeSeekTo = seekTo;
+
+    function installOpenHandler() {
+        var btn = document.querySelector('#open_result_btn button');
+        if (btn && !btn.__showmeSeekBound) {
+            btn.__showmeSeekBound = true;
+            btn.addEventListener('click', triggerSeekFromChoice);
+            log('open-handler installed');
+        }
+        // Also react to the dropdown itself changing (selecting a row).
+        var dropdown = document.querySelector('#selected_result input');
+        if (dropdown && !dropdown.__showmeSeekBound) {
+            dropdown.__showmeSeekBound = true;
+            dropdown.addEventListener('change', function () { setTimeout(triggerSeekFromChoice, 100); });
+            log('dropdown-handler installed');
+        }
+    }
+
+    setInterval(installOpenHandler, 300);
 })();
 </script>
         """
@@ -297,12 +414,16 @@ def build_app(engine: SearchEngine, videos_dir: Path):
         search_btn.click(
             fn=do_search,
             inputs=[query_box, top_k_slider, video_filter],
-            outputs=[anchor_panel, results_table, selected_result, video_player],
+            outputs=[answer_panel, anchor_panel, results_table, selected_result, video_player],
+            show_progress="minimal",
+            show_progress_on=[answer_panel],
         )
         query_box.submit(
             fn=do_search,
             inputs=[query_box, top_k_slider, video_filter],
-            outputs=[anchor_panel, results_table, selected_result, video_player],
+            outputs=[answer_panel, anchor_panel, results_table, selected_result, video_player],
+            show_progress="minimal",
+            show_progress_on=[answer_panel],
         )
         open_btn.click(
             fn=open_selected_result,

@@ -15,3 +15,7 @@ videos/
 .env.*
 .DS_Store
 .claude/
+.gradio/
+SLIDES*.pdf
+SLIDES*.html
+SLIDES*.pptx
