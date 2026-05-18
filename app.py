@@ -11,6 +11,8 @@ The UI lets you:
 """
 
 import argparse
+import html
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,6 +45,37 @@ SOURCE_LABEL = {
     "visual": "🖼 Visual",
 }
 
+LLM_CHOICES = [
+    "anthropic",
+    "none",
+    "gemma4:e4b",
+    "gemma3:12b",
+    "gemma3:4b",
+    "llama3.1:8b",
+    "llama3.2:3b",
+    "gpt-oss:20b",
+    "custom-ollama",
+]
+
+
+def llm_choice_value(engine: SearchEngine) -> str:
+    if engine.llm_provider in {"anthropic", "none"}:
+        return engine.llm_provider
+    if engine.ollama_model in LLM_CHOICES:
+        return engine.ollama_model
+    return "custom-ollama"
+
+
+def configure_llm(engine: SearchEngine, llm_choice: str, custom_ollama_model: str) -> None:
+    choice = (llm_choice or "none").strip()
+    if choice in {"anthropic", "none"}:
+        engine.set_llm_provider(choice)
+        return
+
+    model = (custom_ollama_model or "").strip() if choice == "custom-ollama" else choice
+    engine.set_llm_provider("ollama")
+    engine.set_ollama_model(model)
+
 
 def results_to_rows(
     results: list[SearchResult],
@@ -58,7 +91,56 @@ def results_to_rows(
             format_timestamp(r.start),
             r.video_id,
             src,
+            f"{r.score:.3f}",
             r.text[:200],
+        ])
+    return rows
+
+
+def _debug_terms(query: str, result: SearchResult) -> list[str]:
+    terms: set[str] = set()
+    for text in (query, result.match_variant):
+        terms.update(t for t in re.findall(r"[\w'-]+", text, flags=re.UNICODE) if len(t) >= 3)
+        if len(text.strip()) >= 3:
+            terms.add(text.strip())
+    return sorted(terms, key=len, reverse=True)
+
+
+def _highlight_terms(text: str, terms: list[str]) -> str:
+    snippet = text[:260]
+    for term in terms:
+        flags = re.IGNORECASE if term.isascii() else 0
+        snippet = re.sub(
+            re.escape(term),
+            lambda m: f"[[{m.group(0)}]]",
+            snippet,
+            flags=flags,
+        )
+    return snippet
+
+
+def results_to_debug_rows(
+    results: list[SearchResult],
+    query: str,
+    anchor_index: int | None = None,
+) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for i, r in enumerate(results):
+        label = "anchor" if anchor_index is not None and i == anchor_index else ""
+        vector_score = r.vector_score or r.score
+        rows.append([
+            str(i + 1),
+            label,
+            f"{r.score:.4f}",
+            f"{vector_score:.4f}",
+            f"{r.density_bonus:.3f}",
+            r.match_variant or "-",
+            str(r.source_rank or "-"),
+            format_timestamp(r.start),
+            r.video_id,
+            r.source,
+            r.density_support or "-",
+            _highlight_terms(r.text, _debug_terms(query, r)),
         ])
     return rows
 
@@ -123,19 +205,27 @@ def build_app(engine: SearchEngine, videos_dir: Path):
                 f'font-family:monospace; background:#eef3fc; padding:1px 4px; border-radius:3px;">'
                 f'[{ts_text}]</a>'
             )
-        return re.sub(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]", _sub, text)
+        return re.sub(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]", _sub, html.escape(text))
 
-    def do_search(query: str, top_k: int, video_filter: str, progress=gr.Progress()):
+    def do_search(
+        query: str,
+        top_k: int,
+        video_filter: str,
+        llm_choice: str,
+        custom_ollama_model: str,
+        progress=gr.Progress(),
+    ):
         nonlocal _last_results
         if not query.strip():
             return (
                 gr.update(value="", visible=False),
                 gr.update(value="", visible=False),
-                [], gr.update(choices=[], value=None), None,
+                [], [], gr.update(choices=[], value=None), gr.update(value=None, playback_position=0),
             )
 
         progress(0.1, desc="מרחיב את השאילתה (Hebrew + English)…")
         vf = video_filter if video_filter and video_filter != "All videos" else None
+        configure_llm(engine, llm_choice, custom_ollama_model)
         progress(0.3, desc="מאחזר קטעים רלוונטיים…")
         pick = engine.find_anchor(query, top_k_display=int(top_k), video_filter=vf)
         progress(0.9, desc="מארגן תוצאות…")
@@ -144,7 +234,7 @@ def build_app(engine: SearchEngine, videos_dir: Path):
             return (
                 gr.update(value="", visible=False),
                 gr.update(value="", visible=False),
-                [], gr.update(choices=[], value=None), None,
+                [], [], gr.update(choices=[], value=None), gr.update(value=None, playback_position=0),
             )
 
         if pick.confidence == "low":
@@ -186,31 +276,36 @@ def build_app(engine: SearchEngine, videos_dir: Path):
             answer_md = gr.update(value="", visible=False)
 
         rows = results_to_rows(_last_results, anchor_index=anchor_index)
+        debug_rows = results_to_debug_rows(_last_results, query, anchor_index=anchor_index)
         choices = results_to_choices(_last_results, anchor_index=anchor_index)
         default_choice = choices[0] if choices else None
-        return answer_md, anchor_md, rows, gr.update(choices=choices, value=default_choice), None
+        return answer_md, anchor_md, rows, debug_rows, gr.update(choices=choices, value=default_choice), gr.update(value=None, playback_position=0)
 
     def open_selected_result(choice: str | None):
         if not choice or not _last_results:
-            return None
+            return gr.update(value=None, playback_position=0)
 
         try:
             idx = int(choice.split(".", 1)[0]) - 1
         except (ValueError, IndexError):
-            return None
+            return gr.update(value=None, playback_position=0)
 
         if idx < 0 or idx >= len(_last_results):
-            return None
+            return gr.update(value=None, playback_position=0)
 
         r = _last_results[idx]
         video_path = video_map.get(r.video_id)
         if video_path is None:
             gr.Warning(f"Video file not found for: {r.video_id}")
-            return None
+            return gr.update(value=None, playback_position=0)
 
-        return str(video_path.resolve())
+        return gr.update(
+            value=str(video_path.resolve()),
+            playback_position=max(0.0, float(r.start)),
+            autoplay=True,
+        )
 
-    with gr.Blocks(title="🎬 Video Search Engine", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title="🎬 Video Search Engine") as demo:
         gr.Markdown(
             "# 🎬 Multimodal Video Search Engine\n"
             "Search across **speech** 🎙, **slides** 📄, and **visuals** 🖼 simultaneously."
@@ -234,6 +329,17 @@ def build_app(engine: SearchEngine, videos_dir: Path):
                     label="Filter by video",
                 )
                 top_k_slider = gr.Slider(1, 20, value=5, step=1, label="Number of results")
+                llm_provider_dropdown = gr.Dropdown(
+                    choices=LLM_CHOICES,
+                    value=llm_choice_value(engine),
+                    label="LLM provider",
+                    info="Local model choices use Ollama. none = deterministic retrieval only.",
+                )
+                ollama_model_box = gr.Textbox(
+                    value=engine.ollama_model,
+                    label="Custom Ollama model",
+                    placeholder="gemma4:e4b",
+                )
 
         # RAG answer panel (visible whenever we have an LLM-generated answer)
         answer_panel = gr.HTML(value="", visible=False)
@@ -243,15 +349,40 @@ def build_app(engine: SearchEngine, videos_dir: Path):
 
         # Results panel
         results_table = gr.Dataframe(
-            headers=["#", "Time", "Video", "Source", "Snippet"],
-            datatype=["str", "str", "str", "str", "str"],
+            headers=["#", "Time", "Video", "Source", "Score", "Snippet"],
+            datatype=["str", "str", "str", "str", "str", "str"],
             value=[],
             interactive=False,
             wrap=True,
             row_count=(0, "dynamic"),
-            col_count=(5, "fixed"),
+            column_count=(6, "fixed"),
             label="Results",
         )
+
+        with gr.Accordion("Retrieval diagnostics", open=False):
+            debug_table = gr.Dataframe(
+                headers=[
+                    "#",
+                    "Picked",
+                    "Final score",
+                    "Vector score",
+                    "Density boost",
+                    "Matched variant",
+                    "Source rank",
+                    "Time",
+                    "Video",
+                    "Source",
+                    "Density support",
+                    "Snippet exact matches",
+                ],
+                datatype=["str"] * 12,
+                value=[],
+                interactive=False,
+                wrap=True,
+                row_count=(0, "dynamic"),
+                column_count=(12, "fixed"),
+                label="Debug trace",
+            )
 
         selected_result = gr.Dropdown(
             choices=[],
@@ -262,7 +393,7 @@ def build_app(engine: SearchEngine, videos_dir: Path):
         open_btn = gr.Button("▶ Open Selected Result", variant="secondary", elem_id="open_result_btn")
 
         gr.Markdown("---\n### ▶ Video player")
-        video_player = gr.Video(label="", interactive=False)
+        video_player = gr.Video(label="", interactive=False, autoplay=True, playback_position=0)
 
         gr.HTML(
             """
@@ -278,7 +409,9 @@ def build_app(engine: SearchEngine, videos_dir: Path):
     function log() { try { console.log.apply(console, ['[showme]'].concat([].slice.call(arguments))); } catch (e) {} }
 
     function doSeekAndPlay(video) {
-        var target = Number(window.__showmeSeekTarget);
+        var rawTarget = window.__showmeSeekTarget;
+        if (rawTarget === null || rawTarget === undefined || rawTarget === '') return false;
+        var target = Number(rawTarget);
         if (!Number.isFinite(target)) return false;
         try {
             log('seeking to', target, 'on video src=', video.currentSrc || video.src);
@@ -350,31 +483,6 @@ def build_app(engine: SearchEngine, videos_dir: Path):
     // Also poll periodically in case the MutationObserver misses a swap.
     setInterval(attachToAllVideos, 500);
 
-    // ── Choice parsing (anchor row in the dropdown) ──
-    function parseChoiceTime(text) {
-        if (!text) return null;
-        var m = text.match(/(\d{1,2}):(\d{2}):(\d{2})/) || text.match(/(\d{1,2}):(\d{2})/);
-        if (!m) return null;
-        if (m.length === 4) return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
-        return (+m[1]) * 60 + (+m[2]);
-    }
-
-    function getSelectedChoiceText() {
-        var input = document.querySelector('#selected_result input');
-        return input ? input.value : null;
-    }
-
-    function triggerSeekFromChoice() {
-        var choice = getSelectedChoiceText();
-        var sec = parseChoiceTime(choice);
-        if (sec === null) {
-            log('no parsable time in choice:', choice);
-            return;
-        }
-        log('user requested seek to', sec, 'from choice:', choice);
-        seekTo(sec);
-    }
-
     // Programmatic seek-to-time, callable from inline onclick handlers in the
     // RAG answer's [HH:MM:SS] citation links.
     function seekTo(sec) {
@@ -388,23 +496,6 @@ def build_app(engine: SearchEngine, videos_dir: Path):
     }
     window.__showmeSeekTo = seekTo;
 
-    function installOpenHandler() {
-        var btn = document.querySelector('#open_result_btn button');
-        if (btn && !btn.__showmeSeekBound) {
-            btn.__showmeSeekBound = true;
-            btn.addEventListener('click', triggerSeekFromChoice);
-            log('open-handler installed');
-        }
-        // Also react to the dropdown itself changing (selecting a row).
-        var dropdown = document.querySelector('#selected_result input');
-        if (dropdown && !dropdown.__showmeSeekBound) {
-            dropdown.__showmeSeekBound = true;
-            dropdown.addEventListener('change', function () { setTimeout(triggerSeekFromChoice, 100); });
-            log('dropdown-handler installed');
-        }
-    }
-
-    setInterval(installOpenHandler, 300);
 })();
 </script>
         """
@@ -413,17 +504,17 @@ def build_app(engine: SearchEngine, videos_dir: Path):
         # Wire up search
         search_btn.click(
             fn=do_search,
-            inputs=[query_box, top_k_slider, video_filter],
-            outputs=[answer_panel, anchor_panel, results_table, selected_result, video_player],
-            show_progress="minimal",
-            show_progress_on=[answer_panel],
+            inputs=[query_box, top_k_slider, video_filter, llm_provider_dropdown, ollama_model_box],
+            outputs=[answer_panel, anchor_panel, results_table, debug_table, selected_result, video_player],
+            show_progress="full",
+            show_progress_on=[results_table],
         )
         query_box.submit(
             fn=do_search,
-            inputs=[query_box, top_k_slider, video_filter],
-            outputs=[answer_panel, anchor_panel, results_table, selected_result, video_player],
-            show_progress="minimal",
-            show_progress_on=[answer_panel],
+            inputs=[query_box, top_k_slider, video_filter, llm_provider_dropdown, ollama_model_box],
+            outputs=[answer_panel, anchor_panel, results_table, debug_table, selected_result, video_player],
+            show_progress="full",
+            show_progress_on=[results_table],
         )
         open_btn.click(
             fn=open_selected_result,
@@ -458,7 +549,7 @@ def main():
 
     engine = SearchEngine(args.db)
     app    = build_app(engine, args.videos)
-    app.launch(server_port=args.port, share=args.share)
+    app.launch(server_port=args.port, share=args.share, theme=gr.themes.Soft())
 
 
 if __name__ == "__main__":

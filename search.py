@@ -11,6 +11,9 @@ Can be used as a module (from app.py) or run standalone:
 import argparse
 import json
 import os
+import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,10 +48,17 @@ TEXT_WEIGHT      = 0.6  # weight for text score in fusion
 VISUAL_WEIGHT    = 0.4  # weight for visual score in fusion
 DEDUP_WINDOW_SEC = 3.0  # suppress results within N sec of a higher-scored hit
 
-ANCHOR_MODEL          = "claude-haiku-4-5"
+LLM_PROVIDER          = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+ANCHOR_MODEL          = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5")
+OLLAMA_MODEL          = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+OLLAMA_URL            = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
 ANCHOR_CANDIDATE_K    = 15   # how many results to give the LLM to choose from
 ANCHOR_MAX_TOKENS     = 400
 DENSITY_DECAY_SEC     = 300.0  # exp decay scale for the "neighbors nearby" boost
+DENSITY_WINDOW_SEC    = 600.0  # only nearby candidates can support one another
+DENSITY_RELATIVE_FLOOR = 0.88  # ignore weak hits below 88% of the best candidate
+DENSITY_NEIGHBOR_WEIGHT = 0.35 # keep density as a relevance tie-breaker
+DENSITY_MAX_BONUS     = 0.65   # cap total score multiplier at 1.65x
 
 ANSWER_MAX_TOKENS     = 600
 ANSWER_SYSTEM_PROMPT = """אתה עוזר ללומדים בקורס AI Engineering. תקבל שאילתת חיפוש של סטודנט ורשימה ממוספרת של קטעים מתומללים מהרצאות וידאו (כולל זמן וזיהוי הרצאה).
@@ -140,6 +150,11 @@ class SearchResult:
     end:      float = field(compare=False)
     text:     str   = field(compare=False)   # snippet shown to user
     source:   str   = field(compare=False)   # "asr" | "ocr" | "visual"
+    vector_score:  float = field(default=0.0, compare=False)
+    density_bonus: float = field(default=0.0, compare=False)
+    match_variant: str   = field(default="", compare=False)
+    source_rank:   int   = field(default=0, compare=False)
+    density_support: str = field(default="", compare=False)
 
 
 @dataclass
@@ -199,13 +214,39 @@ class SearchEngine:
         self.clip_model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).to(DEVICE)
         self.clip_model.eval()
 
-        # Anthropic client is lazy — only created if find_anchor is called
+        provider = LLM_PROVIDER if LLM_PROVIDER in {"anthropic", "ollama", "none"} else "none"
+        if provider != LLM_PROVIDER:
+            print(f"[search] Unknown LLM_PROVIDER={LLM_PROVIDER!r}; using 'none'.")
+        self.llm_provider = provider
+        self.ollama_model = OLLAMA_MODEL
+        print(f"[search] LLM provider: {self.llm_provider}")
+        print(f"[search] Ollama model: {self.ollama_model}")
+
+        # Anthropic client is lazy — only created if the provider needs it.
         self._anthropic: Anthropic | None = None
         self._expansion_cache: dict[str, list[str]] = {}
 
         print("[search] Ready.")
 
+    def set_llm_provider(self, provider: str) -> None:
+        provider = (provider or "none").strip().lower()
+        if provider not in {"anthropic", "ollama", "none"}:
+            provider = "none"
+        if provider != self.llm_provider:
+            print(f"[search] switching LLM provider: {self.llm_provider} → {provider}")
+            self.llm_provider = provider
+            self._expansion_cache.clear()
+
+    def set_ollama_model(self, model: str) -> None:
+        model = (model or OLLAMA_MODEL).strip()
+        if model and model != self.ollama_model:
+            print(f"[search] switching Ollama model: {self.ollama_model} → {model}")
+            self.ollama_model = model
+            self._expansion_cache.clear()
+
     def _get_anthropic(self) -> Anthropic | None:
+        if self.llm_provider != "anthropic":
+            return None
         if self._anthropic is not None:
             return self._anthropic
         if Anthropic is None:
@@ -217,8 +258,88 @@ class SearchEngine:
         self._anthropic = Anthropic()
         return self._anthropic
 
+    def _ollama_chat(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int = 400,
+        json_mode: bool = False,
+    ) -> str:
+        """Call a local Ollama chat model. Raises on connection/model errors."""
+        payload: dict = {
+            "model": self.ollama_model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": 0,
+                "num_predict": max_tokens,
+            },
+        }
+        if json_mode:
+            payload["format"] = "json"
+
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            OLLAMA_URL,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"Ollama HTTP {e.code} at {OLLAMA_URL} for model "
+                f"{self.ollama_model!r}: {detail}"
+            ) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                f"Could not reach Ollama at {OLLAMA_URL}. Is `ollama serve` running? ({e.reason})"
+            ) from e
+        content = (body.get("message") or {}).get("content", "").strip()
+        if not content:
+            done_reason = body.get("done_reason") or body.get("error") or "unknown"
+            raise RuntimeError(
+                f"Ollama returned an empty response for model {self.ollama_model!r} "
+                f"(done_reason={done_reason})"
+            )
+        return content
+
+    def _ollama_json(self, messages: list[dict[str, str]], max_tokens: int = 400) -> dict:
+        """Ask Ollama for JSON, retrying once without JSON mode for models that stumble."""
+        first_error: Exception | None = None
+        try:
+            return _parse_json_lenient(
+                self._ollama_chat(messages, max_tokens=max_tokens, json_mode=True)
+            )
+        except Exception as e:
+            first_error = e
+            print(f"[search] ollama JSON-mode response failed: {e}; retrying without JSON mode.")
+
+        try:
+            return _parse_json_lenient(
+                self._ollama_chat(messages, max_tokens=max_tokens, json_mode=False)
+            )
+        except Exception as e:
+            raise RuntimeError(f"could not parse Ollama JSON response ({first_error}; retry: {e})") from e
+
+    @staticmethod
+    def _ordered_variants(query: str, variants: list[str]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for v in [query] + variants:
+            vv = str(v).strip()
+            key = vv.lower()
+            if vv and key not in seen:
+                seen.add(key)
+                ordered.append(vv)
+            if len(ordered) >= QUERY_EXPANSION_MAX_VARIANTS:
+                break
+        return ordered
+
     def _expand_query(self, query: str) -> list[str]:
-        """Expand a query into bilingual variants via Claude Haiku. Falls back
+        """Expand a query into bilingual variants via the configured LLM. Falls back
         to the raw query if the LLM is unavailable or the call fails. Cached
         in-process per query string."""
         q = query.strip()
@@ -226,6 +347,34 @@ class SearchEngine:
             return [q]
         if q in self._expansion_cache:
             return self._expansion_cache[q]
+
+        if self.llm_provider == "none":
+            self._expansion_cache[q] = [q]
+            return [q]
+
+        if self.llm_provider == "ollama":
+            try:
+                data = self._ollama_json(
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                QUERY_EXPANSION_PROMPT
+                                + '\n\nReturn only JSON in this shape: {"variants": ["..."]}.'
+                            ),
+                        },
+                        {"role": "user", "content": q},
+                    ],
+                    max_tokens=200,
+                )
+                ordered = self._ordered_variants(q, list(data.get("variants") or []))
+                print(f"[search] expanded {q!r} via ollama → {ordered}")
+                self._expansion_cache[q] = ordered
+                return ordered
+            except Exception as e:
+                print(f"[search] ollama expand_query failed: {e}")
+                self._expansion_cache[q] = [q]
+                return [q]
 
         client = self._get_anthropic()
         if client is None:
@@ -251,17 +400,7 @@ class SearchEngine:
             if tool_use is None:
                 raise ValueError("LLM did not call expand_query")
             variants = list(tool_use.input.get("variants") or [])
-            # Always include the original; dedupe; cap.
-            seen: set[str] = set()
-            ordered: list[str] = []
-            for v in [q] + variants:
-                vv = v.strip()
-                key = vv.lower()
-                if vv and key not in seen:
-                    seen.add(key)
-                    ordered.append(vv)
-                if len(ordered) >= QUERY_EXPANSION_MAX_VARIANTS:
-                    break
+            ordered = self._ordered_variants(q, variants)
             print(f"[search] expanded {q!r} → {ordered}")
             self._expansion_cache[q] = ordered
             return ordered
@@ -321,11 +460,11 @@ class SearchEngine:
             include=["documents", "metadatas", "distances"],
         )
         hits = []
-        for doc, meta, dist in zip(
+        for rank, (doc, meta, dist) in enumerate(zip(
             results["documents"][0],
             results["metadatas"][0],
             results["distances"][0],
-        ):
+        ), start=1):
             # ChromaDB returns cosine *distance* (0=identical, 2=opposite)
             # Convert to similarity score in [0, 1]
             score = 1.0 - dist / 2.0
@@ -336,6 +475,7 @@ class SearchEngine:
                 "end":      meta["end"],
                 "text":     doc,
                 "source":   meta.get("source", "asr"),
+                "rank":     rank,
             })
         return hits
 
@@ -348,11 +488,11 @@ class SearchEngine:
             include=["documents", "metadatas", "distances"],
         )
         hits = []
-        for doc, meta, dist in zip(
+        for rank, (doc, meta, dist) in enumerate(zip(
             results["documents"][0],
             results["metadatas"][0],
             results["distances"][0],
-        ):
+        ), start=1):
             score = 1.0 - dist / 2.0
             ts = meta["timestamp"]
             hits.append({
@@ -362,6 +502,7 @@ class SearchEngine:
                 "end":      ts + 1.0,
                 "text":     f"[visual match @ {ts:.1f}s]",
                 "source":   "visual",
+                "rank":     rank,
             })
         return hits
 
@@ -384,6 +525,7 @@ class SearchEngine:
                 end      = h["end"],
                 text     = h["text"],
                 source   = h["source"],
+                vector_score = h["score"],
             ))
 
         for h in visual_hits:
@@ -394,6 +536,7 @@ class SearchEngine:
                 end      = h["end"],
                 text     = h["text"],
                 source   = h["source"],
+                vector_score = h["score"],
             ))
 
         # Merge hits that are very close in time (same moment, different sources)
@@ -472,6 +615,8 @@ class SearchEngine:
                 key = (h["video_id"], round(h["start"], 2), h["source"])
                 prev = merged.get(key)
                 if prev is None or h["score"] > prev["score"]:
+                    h["match_variant"] = v
+                    h["source_rank"] = h.get("rank", 0)
                     merged[key] = h
 
         results: list[SearchResult] = []
@@ -483,24 +628,60 @@ class SearchEngine:
                 end      = h["end"],
                 text     = h["text"],
                 source   = h["source"],
+                vector_score = h["score"],
+                match_variant = h.get("match_variant", ""),
+                source_rank = h.get("source_rank", 0),
             ))
         results.sort(key=lambda r: -r.score)
         return results
 
     @staticmethod
     def _density_boosted(candidates: list[SearchResult]) -> list[SearchResult]:
-        """Return a new list where each candidate's score is multiplied by
-        (1 + sum of exp(-|Δt| / DENSITY_DECAY_SEC) over the other candidates
-        in the same video). Rewards results that cluster in time."""
+        """Boost relevant candidates that are supported by nearby relevant hits.
+
+        Density is intentionally conservative: weak candidates cannot become
+        strong only because many other weak candidates are nearby. This keeps
+        clustering as a tie-breaker among plausible matches rather than the main
+        relevance signal.
+        """
         import math
+        if not candidates:
+            return []
+
+        max_score = max(c.score for c in candidates)
+        relevance_floor = max_score * DENSITY_RELATIVE_FLOOR
+        denom = max(max_score - relevance_floor, 1e-9)
+
         boosted: list[SearchResult] = []
         for c in candidates:
             bonus = 0.0
-            for o in candidates:
-                if o is c or o.video_id != c.video_id:
-                    continue
-                dt = abs(o.start - c.start)
-                bonus += math.exp(-dt / DENSITY_DECAY_SEC)
+            support: list[str] = []
+            if c.score >= relevance_floor:
+                for o in candidates:
+                    if (
+                        o is c
+                        or o.video_id != c.video_id
+                        or o.score < relevance_floor
+                    ):
+                        continue
+                    dt = abs(o.start - c.start)
+                    if dt > DENSITY_WINDOW_SEC:
+                        continue
+                    neighbor_strength = (o.score - relevance_floor) / denom
+                    source_diversity = 1.15 if o.source != c.source else 1.0
+                    bonus += (
+                        neighbor_strength
+                        * source_diversity
+                        * math.exp(-dt / DENSITY_DECAY_SEC)
+                    )
+                    exact_terms = _variant_terms_in_text(o.match_variant, o.text)
+                    exact = ",".join(exact_terms) if exact_terms else "semantic-only"
+                    support.append(
+                        f"{_hms(o.start)} {o.source} "
+                        f"variant={o.match_variant or '-'} exact={exact} "
+                        f"vec={(o.vector_score or o.score):.3f}"
+                    )
+            bonus = min(DENSITY_MAX_BONUS, bonus * DENSITY_NEIGHBOR_WEIGHT)
             boosted.append(SearchResult(
                 score    = c.score * (1.0 + bonus),
                 video_id = c.video_id,
@@ -508,6 +689,11 @@ class SearchEngine:
                 end      = c.end,
                 text     = c.text,
                 source   = c.source,
+                vector_score = c.vector_score or c.score,
+                density_bonus = bonus,
+                match_variant = c.match_variant,
+                source_rank = c.source_rank,
+                density_support = "; ".join(support) if support else "-",
             ))
         boosted.sort(key=lambda r: -r.score)
         return boosted
@@ -516,12 +702,12 @@ class SearchEngine:
         self,
         query: str,
         chunks: list[SearchResult],
-        client: Anthropic,
+        client: Anthropic | None = None,
     ) -> str:
         """Generate a short Hebrew answer grounded in the retrieved chunks.
         Inline citations use [HH:MM:SS] format so the UI can hyperlink them
         to video seeks."""
-        if not chunks or client is None:
+        if not chunks or self.llm_provider == "none":
             return ""
 
         lines = []
@@ -531,6 +717,25 @@ class SearchEngine:
             lines.append(f"[{ts}] ({c.video_id}, {c.source}) {snippet}")
         evidence = "\n".join(lines)
         user_msg = f"שאילתת חיפוש: {query}\n\nקטעים זמינים:\n{evidence}"
+
+        if self.llm_provider == "ollama":
+            try:
+                return self._ollama_chat(
+                    [
+                        {"role": "system", "content": ANSWER_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    max_tokens=ANSWER_MAX_TOKENS,
+                    json_mode=False,
+                )
+            except Exception as e:
+                print(f"[search] ollama _generate_answer failed: {e}")
+                return ""
+
+        if client is None:
+            client = self._get_anthropic()
+        if client is None:
+            return ""
 
         try:
             resp = client.messages.create(
@@ -551,6 +756,20 @@ class SearchEngine:
             print(f"[search] _generate_answer failed: {e}")
             return ""
 
+    def _deterministic_anchor(
+        self,
+        candidates: list[SearchResult],
+        top_k_display: int,
+        reason: str,
+        confidence: str = "medium",
+    ) -> AnchorPick:
+        return AnchorPick(
+            result=candidates[0],
+            reason=reason,
+            confidence=confidence,
+            others=candidates[1:top_k_display + 1],
+        )
+
     def find_anchor(
         self,
         query: str,
@@ -562,19 +781,16 @@ class SearchEngine:
         'teaching moment' anchor. Falls back to None (the caller should display
         plain retrieval results) if the LLM is unavailable or the call fails.
         """
-        client = self._get_anthropic()
-        candidates = self._anchor_candidates(query, video_filter=video_filter)
-        if not candidates:
+        raw_candidates = self._anchor_candidates(query, video_filter=video_filter)
+        if not raw_candidates:
             return None
-        if client is None:
-            # No LLM — return the top retrieval result as a "low confidence" pick
-            remaining = candidates[1:]
-            others = self._density_boosted(remaining)[:top_k_display]
-            return AnchorPick(
-                result=candidates[0],
-                reason="(LLM disabled; showing top retrieval result.)",
-                confidence="low",
-                others=others,
+        candidates = self._density_boosted(raw_candidates)[:ANCHOR_CANDIDATE_K]
+
+        if self.llm_provider == "none":
+            return self._deterministic_anchor(
+                candidates,
+                top_k_display,
+                reason="(LLM_PROVIDER=none; showing top density-ranked retrieval result.)",
             )
 
         # Format candidates for the LLM
@@ -582,9 +798,62 @@ class SearchEngine:
         for i, c in enumerate(candidates, start=1):
             ts = _hms(c.start)
             snippet = c.text.replace("\n", " ").strip()[:300]
-            lines.append(f"[{i}] {ts} ({c.source}) {snippet}")
+            lines.append(f"[{i}] {c.video_id} {ts} ({c.source}, score={c.score:.3f}) {snippet}")
         candidates_block = "\n".join(lines)
         user_msg = f"שאילתת חיפוש: {query}\n\nקטעים:\n{candidates_block}"
+
+        if self.llm_provider == "ollama":
+            try:
+                pick = self._ollama_json(
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                ANCHOR_SYSTEM_PROMPT
+                                + '\n\nReturn only JSON in this shape: '
+                                '{"chosen": 1, "reason": "...", "confidence": "high|medium|low"}.'
+                            ),
+                        },
+                        {"role": "user", "content": user_msg},
+                    ],
+                    max_tokens=ANCHOR_MAX_TOKENS,
+                )
+                idx = int(pick["chosen"]) - 1
+                if not (0 <= idx < len(candidates)):
+                    raise ValueError(f"Ollama returned out-of-range index {idx+1}")
+                confidence = str(pick.get("confidence", "medium")).strip().lower()
+                if confidence not in {"high", "medium", "low"}:
+                    confidence = "medium"
+                chosen = candidates[idx]
+                remaining = [c for i, c in enumerate(candidates) if i != idx]
+                others = remaining[:top_k_display]
+                answer = self._generate_answer(query, [chosen] + others)
+                return AnchorPick(
+                    result=chosen,
+                    reason=(pick.get("reason") or "").strip(),
+                    confidence=confidence,
+                    others=others,
+                    answer=answer,
+                )
+            except Exception as e:
+                print(f"[search] ollama find_anchor failed: {e}")
+                return self._deterministic_anchor(
+                    candidates,
+                    top_k_display,
+                    reason=(
+                        "(Ollama could not return a valid JSON anchor; "
+                        "showing top density-ranked retrieval result.)"
+                    ),
+                    confidence="medium",
+                )
+
+        client = self._get_anthropic()
+        if client is None:
+            return self._deterministic_anchor(
+                candidates,
+                top_k_display,
+                reason="(Anthropic unavailable; showing top density-ranked retrieval result.)",
+            )
 
         try:
             resp = client.messages.create(
@@ -609,10 +878,8 @@ class SearchEngine:
             if not (0 <= idx < len(candidates)):
                 raise ValueError(f"LLM returned out-of-range index {idx+1}")
             chosen = candidates[idx]
-            # Re-rank the remaining candidates by density-boosted score so
-            # clusters of nearby moments float up.
             remaining = [c for i, c in enumerate(candidates) if i != idx]
-            others = self._density_boosted(remaining)[:top_k_display]
+            others = remaining[:top_k_display]
             # Generate the Hebrew RAG answer from the chosen + top alternatives.
             answer = self._generate_answer(query, [chosen] + others, client)
             return AnchorPick(
@@ -624,13 +891,11 @@ class SearchEngine:
             )
         except Exception as e:
             print(f"[search] find_anchor failed: {e}")
-            remaining = candidates[1:]
-            others = self._density_boosted(remaining)[:top_k_display]
-            return AnchorPick(
-                result=candidates[0],
-                reason=f"(LLM error: {e}; showing top retrieval result.)",
-                confidence="low",
-                others=others,
+            return self._deterministic_anchor(
+                candidates,
+                top_k_display,
+                reason=f"(Anthropic error: {e}; showing top density-ranked retrieval result.)",
+                confidence="medium",
             )
 
 
@@ -645,9 +910,33 @@ def _hms(seconds: float) -> str:
     return f"{h:d}:{m:02d}:{s:02d}"
 
 
+def _variant_terms_in_text(variant: str, text: str) -> list[str]:
+    """Return literal variant terms found in a retrieved chunk."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for term in re.findall(r"[\w'-]+", variant, flags=re.UNICODE):
+        if len(term) < 3:
+            continue
+        flags = re.IGNORECASE if term.isascii() else 0
+        if re.search(re.escape(term), text, flags=flags):
+            key = term.lower() if term.isascii() else term
+            if key not in seen:
+                seen.add(key)
+                found.append(term)
+    whole = variant.strip()
+    if len(whole) >= 3:
+        flags = re.IGNORECASE if whole.isascii() else 0
+        key = whole.lower() if whole.isascii() else whole
+        if key not in seen and re.search(re.escape(whole), text, flags=flags):
+            found.insert(0, whole)
+    return found
+
+
 def _parse_json_lenient(text: str) -> dict:
     """Parse a JSON object that may be wrapped in markdown fences or prose."""
     text = text.strip()
+    if not text:
+        raise ValueError("empty JSON response")
     if text.startswith("```"):
         # strip ``` or ```json … ```
         text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -659,7 +948,11 @@ def _parse_json_lenient(text: str) -> dict:
     last = text.rfind("}")
     if first != -1 and last != -1 and last > first:
         text = text[first:last+1]
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        preview = text.replace("\n", " ")[:160]
+        raise ValueError(f"non-JSON response: {preview!r}") from e
 
 
 # ─────────────────────────────────────────────

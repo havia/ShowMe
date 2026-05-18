@@ -72,6 +72,19 @@ python app.py --db data/index/chroma/ --videos data/videos/
 # Open http://localhost:7860
 ```
 
+### Optional — choose the LLM provider
+The UI settings panel lets you switch between:
+- `anthropic` — Claude query expansion, anchor picker, and RAG answer.
+- Gemma / Llama Ollama presets — local Ollama models for those same LLM steps.
+- `custom-ollama` — any other local Ollama model you have downloaded.
+- `none` — deterministic retrieval only, useful for debugging vectors.
+
+You can also set defaults before launching:
+```bash
+LLM_PROVIDER=none python app.py --db data/index/chroma/ --videos data/videos/
+LLM_PROVIDER=ollama OLLAMA_MODEL=llama3.1:8b python app.py --db data/index/chroma/ --videos data/videos/
+```
+
 ---
 
 ## Project structure
